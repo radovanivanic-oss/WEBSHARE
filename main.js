@@ -1,0 +1,827 @@
+const axios = require("axios");
+const fs = require("fs");
+const fsPromises = fs.promises;
+const path = require("path");
+const puppeteer = require("puppeteer");
+const { parseStringPromise } = require("xml2js");
+const zlib = require("zlib");
+
+const BASE_URL = "https://webshare.cz";
+const LOGIN_URL = `${BASE_URL}/`;
+const SEARCH_URL = `${BASE_URL}/api/search/`;
+const FILE_LINK_URL = `${BASE_URL}/api/file_link/`;
+const SEARCH_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
+const ONE_GB = 1073741824;
+const PAGE_LIMIT = 100;
+const SEARCH_SPLIT_SENTINEL = 1000;
+const MAX_PREFIX_DEPTH = 5;
+const REQUEST_TIMEOUT_MS = 30000;
+const LOGIN_TIMEOUT_MS = 45000;
+const RETRY_COUNT = 5;
+const RETRY_BASE_DELAY_MS = 1000;
+const RETRY_MAX_DELAY_MS = 30000;
+const DEFAULT_OUTPUT_PATH = "/var/www/html/videos_all.json";
+const DIRECT_URL_BATCH_SIZE = 50;
+const CHECKPOINT_SAVE_INTERVAL = 1;
+const USER_AGENT =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+class WebshareApiError extends Error {
+  constructor(endpoint, code, message, status) {
+    super(`${endpoint} failed: ${message || "Unknown error"}`);
+    this.name = "WebshareApiError";
+    this.endpoint = endpoint;
+    this.code = code || null;
+    this.status = status || null;
+  }
+}
+
+function getConfig() {
+  const username = process.env.WEBSHARE_USERNAME;
+  const password = process.env.WEBSHARE_PASSWORD;
+  const outputPath = process.env.OUTPUT_JSON_PATH || DEFAULT_OUTPUT_PATH;
+
+  if (!username || !password) {
+    throw new Error("Chýba WEBSHARE_USERNAME alebo WEBSHARE_PASSWORD.");
+  }
+
+  const runtimeDir = path.resolve(process.cwd(), "runtime");
+
+  return {
+    username,
+    password,
+    outputPath,
+    sizeLimit: ONE_GB,
+    runtimeDir,
+    logPath: path.join(runtimeDir, "webshare-crawler.log"),
+    checkpointPath: path.join(runtimeDir, "webshare-crawler.checkpoint.json"),
+    lockPath: path.join(runtimeDir, "webshare-crawler.lock"),
+    healthPath: path.join(runtimeDir, "health.json"),
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function computeBackoffMs(attempt) {
+  const exponential = Math.min(
+    RETRY_MAX_DELAY_MS,
+    RETRY_BASE_DELAY_MS * 2 ** (attempt - 1)
+  );
+  const jitter = Math.floor(Math.random() * 300);
+  return exponential + jitter;
+}
+
+function createLogger(logPath) {
+  const stream = fs.createWriteStream(logPath, { flags: "a" });
+
+  function write(level, message, extra) {
+    const timestamp = new Date().toISOString();
+    const base = `[${timestamp}] [${level}] ${message}`;
+    const suffix =
+      extra === undefined ? "" : ` ${JSON.stringify(extra, null, 2)}`;
+    const line = `${base}${suffix}`;
+
+    console.log(line);
+    stream.write(`${line}\n`);
+  }
+
+  return {
+    info(message, extra) {
+      write("INFO", message, extra);
+    },
+    warn(message, extra) {
+      write("WARN", message, extra);
+    },
+    error(message, extra) {
+      write("ERROR", message, extra);
+    },
+    async close() {
+      await new Promise((resolve) => stream.end(resolve));
+    },
+  };
+}
+
+function createRunStats() {
+  return {
+    startedAtMs: Date.now(),
+    apiRequests: 0,
+    foundVideos: 0,
+    filteredVideos: 0,
+    duplicateVideos: 0,
+    invalidItems: 0,
+  };
+}
+
+function getDurationSeconds(stats) {
+  return Math.round((Date.now() - stats.startedAtMs) / 1000);
+}
+
+async function retry(fn, label, logger, options = {}) {
+  const retries = options.retries || RETRY_COUNT;
+  const shouldRetry = options.shouldRetry || (() => true);
+  let lastError;
+
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      return await fn(attempt);
+    } catch (error) {
+      lastError = error;
+
+      if (attempt >= retries || !shouldRetry(error)) {
+        break;
+      }
+
+      const delayMs = computeBackoffMs(attempt);
+      logger.warn(`${label} zlyhalo, čakám ${delayMs} ms`, {
+        attempt,
+        retries,
+        error: error.message,
+      });
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError;
+}
+
+function createApiClient() {
+  return axios.create({
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": USER_AGENT,
+      Accept: "text/xml; charset=UTF-8",
+    },
+    timeout: REQUEST_TIMEOUT_MS,
+    responseType: "text",
+    validateStatus: (status) => status >= 200 && status < 300,
+  });
+}
+
+function parseStatus(parsed, endpoint) {
+  const status = parsed?.response?.status?.[0] || null;
+  const code = parsed?.response?.code?.[0] || null;
+  const message = parsed?.response?.message?.[0] || null;
+
+  if (status !== "OK") {
+    throw new WebshareApiError(endpoint, code, message, status);
+  }
+
+  return parsed.response;
+}
+
+function isAuthError(error) {
+  if (!(error instanceof WebshareApiError)) {
+    return false;
+  }
+
+  const message = `${error.message} ${error.code || ""}`.toLowerCase();
+  return message.includes("access denied") || message.includes("token");
+}
+
+function isRetryableFileLinkError(error) {
+  if (!(error instanceof WebshareApiError)) {
+    return true;
+  }
+
+  return ["FILE_LINK_FATAL_4", "FILE_LINK_FATAL_5"].includes(error.code);
+}
+
+function normalizeFile(file) {
+  const ident = file.ident?.[0];
+  const name = file.name?.[0] || "";
+  const size = Number.parseInt(file.size?.[0] || "0", 10);
+
+  if (!ident || !Number.isFinite(size)) {
+    return null;
+  }
+
+  return {
+    id: ident,
+    name,
+    size,
+    direct_url: null,
+  };
+}
+
+async function ensureDirectory(filePath) {
+  await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
+}
+
+async function writeJsonAtomically(filePath, data) {
+  const tempPath = `${filePath}.tmp`;
+  await ensureDirectory(filePath);
+  await fsPromises.writeFile(tempPath, JSON.stringify(data, null, 2), "utf8");
+  await fsPromises.rename(tempPath, filePath);
+}
+
+async function writeGzipFile(filePath, data) {
+  const gzPath = `${filePath}.gz`;
+  const tempPath = `${gzPath}.tmp`;
+  const json = JSON.stringify(data, null, 2);
+  const gzipped = await new Promise((resolve, reject) => {
+    zlib.gzip(json, (error, buffer) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(buffer);
+    });
+  });
+
+  await ensureDirectory(gzPath);
+  await fsPromises.writeFile(tempPath, gzipped);
+  await fsPromises.rename(tempPath, gzPath);
+}
+
+function createInitialCheckpoint() {
+  return {
+    version: 2,
+    phase: "crawl",
+    queue: SEARCH_CHARS.map((prefix) => ({ prefix, depth: 1 })),
+    processedPrefixes: 0,
+    itemsById: {},
+    resolvedIds: 0,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function loadCheckpoint(checkpointPath, logger) {
+  try {
+    const raw = await fsPromises.readFile(checkpointPath, "utf8");
+    const parsed = JSON.parse(raw);
+    logger.info("Našiel som checkpoint, pokračujem z neho.", {
+      phase: parsed.phase,
+      queued: parsed.queue?.length || 0,
+      items: Object.keys(parsed.itemsById || {}).length,
+      resolvedIds: parsed.resolvedIds || 0,
+    });
+    return parsed;
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      logger.warn("Checkpoint sa nepodarilo načítať, idem odznova.", {
+        error: error.message,
+      });
+    }
+
+    return createInitialCheckpoint();
+  }
+}
+
+async function saveCheckpoint(checkpointPath, state) {
+  state.updatedAt = new Date().toISOString();
+  await writeJsonAtomically(checkpointPath, state);
+}
+
+async function clearCheckpoint(checkpointPath, logger) {
+  try {
+    await fsPromises.unlink(checkpointPath);
+    logger.info("Checkpoint bol odstránený po úspešnom dokončení.");
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      logger.warn("Checkpoint sa nepodarilo odstrániť.", {
+        error: error.message,
+      });
+    }
+  }
+}
+
+async function isProcessRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function acquireLock(lockPath, logger) {
+  await ensureDirectory(lockPath);
+
+  try {
+    const existing = await fsPromises.readFile(lockPath, "utf8");
+    const parsed = JSON.parse(existing);
+
+    if (parsed?.pid && (await isProcessRunning(parsed.pid))) {
+      logger.warn("crawler already running", {
+        pid: parsed.pid,
+        startedAt: parsed.startedAt || null,
+      });
+      const error = new Error("crawler already running");
+      error.code = "CRAWLER_ALREADY_RUNNING";
+      throw error;
+    }
+  } catch (error) {
+    if (!["ENOENT"].includes(error.code) && error.code !== "CRAWLER_ALREADY_RUNNING") {
+      logger.warn("Lock file sa nepodarilo načítať, prepíšem ho.", {
+        error: error.message,
+      });
+    } else if (error.code === "CRAWLER_ALREADY_RUNNING") {
+      throw error;
+    }
+  }
+
+  const payload = {
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+  };
+  await fsPromises.writeFile(lockPath, JSON.stringify(payload, null, 2), "utf8");
+}
+
+async function releaseLock(lockPath, logger) {
+  try {
+    await fsPromises.unlink(lockPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      logger.warn("Lock file sa nepodarilo odstrániť.", {
+        error: error.message,
+      });
+    }
+  }
+}
+
+function isValidFinalItem(item) {
+  return Boolean(
+    item &&
+      item.id &&
+      item.name &&
+      Number.isFinite(item.size) &&
+      item.size > 0 &&
+      item.direct_url
+  );
+}
+
+function buildHealthReport({ success, videos, durationSeconds }) {
+  return {
+    success,
+    generated_at: new Date().toISOString(),
+    videos,
+    duration_seconds: durationSeconds,
+  };
+}
+
+async function loginAndGetWst({ username, password }) {
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent(USER_AGENT);
+    await page.goto(LOGIN_URL, {
+      waitUntil: "networkidle2",
+      timeout: LOGIN_TIMEOUT_MS,
+    });
+
+    await page.click("a.login");
+    await page.waitForSelector('input[name="username"]', {
+      timeout: LOGIN_TIMEOUT_MS,
+    });
+    await page.type('input[name="username"]', username, { delay: 20 });
+    await page.type('input[name="password"]', password, { delay: 20 });
+
+    await Promise.all([
+      page.waitForNavigation({
+        waitUntil: "networkidle2",
+        timeout: LOGIN_TIMEOUT_MS,
+      }).catch(() => null),
+      page.click('input.ws-small-button.green.ws-margin-bottom-10[type="submit"]'),
+    ]);
+
+    await sleep(1500);
+
+    const cookies = await page.cookies();
+    const wstCookie = cookies.find((cookie) => cookie.name === "wst");
+
+    if (!wstCookie?.value) {
+      throw new Error("Cookie wst po prihlásení nebola nájdená.");
+    }
+
+    return wstCookie.value;
+  } finally {
+    await browser.close();
+  }
+}
+
+class WebshareSession {
+  constructor(config, logger) {
+    this.config = config;
+    this.logger = logger;
+    this.cachedWst = null;
+  }
+
+  invalidate() {
+    this.cachedWst = null;
+  }
+
+  async getWst(forceRefresh = false) {
+    if (!forceRefresh && this.cachedWst) {
+      return this.cachedWst;
+    }
+
+    this.logger.info("Obnovujem WST token.");
+    this.cachedWst = await retry(
+      () =>
+        loginAndGetWst({
+          username: this.config.username,
+          password: this.config.password,
+        }),
+      "Puppeteer login",
+      this.logger
+    );
+    return this.cachedWst;
+  }
+
+  async withWst(task) {
+    let refreshed = false;
+
+    while (true) {
+      const wst = await this.getWst(refreshed);
+
+      try {
+        return await task(wst);
+      } catch (error) {
+        if (!refreshed && isAuthError(error)) {
+          this.logger.warn("WST token vyzerá neplatný, idem ho obnoviť.");
+          this.invalidate();
+          refreshed = true;
+          continue;
+        }
+
+        throw error;
+      }
+    }
+  }
+}
+
+async function postXml(client, url, params, endpointName, stats) {
+  stats.apiRequests += 1;
+  const response = await client.post(url, params.toString());
+  const parsed = await parseStringPromise(response.data, {
+    explicitArray: true,
+    trim: true,
+  });
+
+  return parseStatus(parsed, endpointName);
+}
+
+async function fetchSearchPage(client, session, { prefix, offset, limit }, stats) {
+  return session.withWst(async (wst) => {
+    const params = new URLSearchParams({
+      what: `${prefix}*`,
+      limit: String(limit),
+      offset: String(offset),
+      sort: "recent",
+      category: "video",
+      wst,
+    });
+
+    const response = await postXml(client, SEARCH_URL, params, "search", stats);
+
+    return {
+      total: Number.parseInt(response.total?.[0] || "0", 10),
+      files: Array.isArray(response.file) ? response.file : [],
+    };
+  });
+}
+
+async function resolveFileLink(client, ident, logger, stats) {
+  return retry(
+    async () => {
+      const params = new URLSearchParams({
+        ident,
+        download_type: "video_stream",
+        force_https: "1",
+      });
+      const response = await postXml(
+        client,
+        FILE_LINK_URL,
+        params,
+        "file_link",
+        stats
+      );
+      return response.link?.[0] || null;
+    },
+    `file_link ${ident}`,
+    logger,
+    { shouldRetry: isRetryableFileLinkError }
+  );
+}
+
+function shouldSplitPrefix(total, depth) {
+  return total >= SEARCH_SPLIT_SENTINEL && depth < MAX_PREFIX_DEPTH;
+}
+
+function appendChildren(queue, prefix, depth) {
+  for (let index = SEARCH_CHARS.length - 1; index >= 0; index -= 1) {
+    queue.unshift({
+      prefix: `${prefix}${SEARCH_CHARS[index]}`,
+      depth: depth + 1,
+    });
+  }
+}
+
+function mergeItems(itemsById, files, sizeLimit, stats) {
+  let added = 0;
+
+  for (const file of files) {
+    const normalized = normalizeFile(file);
+
+    if (normalized) {
+      stats.foundVideos += 1;
+    }
+
+    if (!normalized || normalized.size < sizeLimit) {
+      continue;
+    }
+
+    stats.filteredVideos += 1;
+
+    if (!itemsById[normalized.id]) {
+      added += 1;
+    } else {
+      stats.duplicateVideos += 1;
+    }
+
+    itemsById[normalized.id] = normalized;
+  }
+
+  return added;
+}
+
+async function fetchAllPagesForPrefix(
+  client,
+  session,
+  state,
+  prefixEntry,
+  firstPage,
+  config,
+  logger,
+  stats
+) {
+  let offset = 0;
+  let addedForPrefix = 0;
+  let page = firstPage;
+
+  while (true) {
+    if (offset > 0) {
+      page = await retry(
+        () =>
+          fetchSearchPage(client, session, {
+            prefix: prefixEntry.prefix,
+            offset,
+            limit: PAGE_LIMIT,
+          }, stats),
+        `search ${prefixEntry.prefix}* offset=${offset}`,
+        logger
+      );
+    }
+
+    if (page.files.length === 0) {
+      break;
+    }
+
+    addedForPrefix += mergeItems(
+      state.itemsById,
+      page.files,
+      config.sizeLimit,
+      stats
+    );
+
+    logger.info(`Prefix ${prefixEntry.prefix}* stránka ${offset / PAGE_LIMIT}`, {
+      files: page.files.length,
+      totalHint: page.total,
+      uniqueItems: Object.keys(state.itemsById).length,
+      addedForPrefix,
+    });
+
+    if (page.files.length < PAGE_LIMIT) {
+      break;
+    }
+
+    offset += PAGE_LIMIT;
+  }
+}
+
+async function crawlPrefixes(client, session, state, config, logger, stats) {
+  while (state.queue.length > 0) {
+    const prefixEntry = state.queue.shift();
+    const firstPage = await retry(
+      () =>
+        fetchSearchPage(client, session, {
+          prefix: prefixEntry.prefix,
+          offset: 0,
+          limit: PAGE_LIMIT,
+        }, stats),
+      `search ${prefixEntry.prefix}* metadata`,
+      logger
+    );
+
+    logger.info(`Analyzujem prefix ${prefixEntry.prefix}*`, {
+      depth: prefixEntry.depth,
+      totalHint: firstPage.total,
+      firstPageCount: firstPage.files.length,
+      queueLeft: state.queue.length,
+    });
+
+    if (firstPage.total === 0 || firstPage.files.length === 0) {
+      state.processedPrefixes += 1;
+      if (state.processedPrefixes % CHECKPOINT_SAVE_INTERVAL === 0) {
+        await saveCheckpoint(config.checkpointPath, state);
+      }
+      continue;
+    }
+
+    if (shouldSplitPrefix(firstPage.total, prefixEntry.depth)) {
+      appendChildren(state.queue, prefixEntry.prefix, prefixEntry.depth);
+      logger.info(`Prefix ${prefixEntry.prefix}* delím ďalej.`, {
+        childCount: SEARCH_CHARS.length,
+        newQueueSize: state.queue.length,
+      });
+    } else {
+      await fetchAllPagesForPrefix(
+        client,
+        session,
+        state,
+        prefixEntry,
+        firstPage,
+        config,
+        logger,
+        stats
+      );
+    }
+
+    state.processedPrefixes += 1;
+
+    if (state.processedPrefixes % CHECKPOINT_SAVE_INTERVAL === 0) {
+      await saveCheckpoint(config.checkpointPath, state);
+    }
+  }
+
+  state.phase = "resolve";
+  state.resolvedIds = 0;
+  await saveCheckpoint(config.checkpointPath, state);
+}
+
+function finalizeItems(itemsById, stats) {
+  return Object.values(itemsById)
+    .filter((item) => {
+      const valid = isValidFinalItem(item);
+
+      if (!valid) {
+        stats.invalidItems += 1;
+      }
+
+      return valid;
+    })
+    .sort((left, right) => {
+      if (right.size !== left.size) {
+        return right.size - left.size;
+      }
+
+      return left.name.localeCompare(right.name, "sk");
+    })
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      size: item.size,
+      direct_url: item.direct_url,
+    }));
+}
+
+async function resolveDirectUrls(client, state, config, logger, stats) {
+  const items = Object.values(state.itemsById).sort((left, right) =>
+    left.id.localeCompare(right.id, "en")
+  );
+
+  for (let index = state.resolvedIds || 0; index < items.length; index += 1) {
+    const item = items[index];
+
+    if (!item.direct_url) {
+      try {
+        item.direct_url = await resolveFileLink(client, item.id, logger, stats);
+      } catch (error) {
+        logger.warn(`Preskakujem ${item.id}, direct URL sa nepodarilo získať.`, {
+          error: error.message,
+          code: error.code || null,
+        });
+      }
+    }
+
+    state.resolvedIds = index + 1;
+
+    if (state.resolvedIds % DIRECT_URL_BATCH_SIZE === 0) {
+      logger.info("Ukladám checkpoint po batchi direct URL.", {
+        resolvedIds: state.resolvedIds,
+        total: items.length,
+      });
+      await saveCheckpoint(config.checkpointPath, state);
+    }
+  }
+
+  await saveCheckpoint(config.checkpointPath, state);
+}
+
+async function prepareRuntime(config) {
+  await fsPromises.mkdir(config.runtimeDir, { recursive: true });
+  await ensureDirectory(config.outputPath);
+}
+
+async function writeHealthReport(config, report) {
+  await writeJsonAtomically(config.healthPath, report);
+}
+
+function buildSummary(stats, finalCount) {
+  return {
+    found_videos: stats.foundVideos,
+    filtered_videos_gte_1gb: stats.filteredVideos,
+    duplicates_removed: stats.duplicateVideos,
+    api_requests: stats.apiRequests,
+    duration_seconds: getDurationSeconds(stats),
+    final_videos: finalCount,
+  };
+}
+
+async function crawlAllVideos(config, logger, stats) {
+  await prepareRuntime(config);
+  const client = createApiClient();
+  const session = new WebshareSession(config, logger);
+  const state = await loadCheckpoint(config.checkpointPath, logger);
+
+  if (state.phase === "crawl") {
+    logger.info("Začínam crawl fázu.");
+    await crawlPrefixes(client, session, state, config, logger, stats);
+  }
+
+  logger.info("Začínam resolve direct URL fázu.");
+  await resolveDirectUrls(client, state, config, logger, stats);
+
+  const finalItems = finalizeItems(state.itemsById, stats);
+  await writeJsonAtomically(config.outputPath, finalItems);
+  await writeGzipFile(config.outputPath, finalItems);
+  await writeHealthReport(
+    config,
+    buildHealthReport({
+      success: true,
+      videos: finalItems.length,
+      durationSeconds: getDurationSeconds(stats),
+    })
+  );
+  await clearCheckpoint(config.checkpointPath, logger);
+
+  return {
+    count: finalItems.length,
+    outputPath: config.outputPath,
+    logPath: config.logPath,
+    healthPath: config.healthPath,
+    summary: buildSummary(stats, finalItems.length),
+  };
+}
+
+async function main() {
+  const config = getConfig();
+  await prepareRuntime(config);
+  const logger = createLogger(config.logPath);
+  const stats = createRunStats();
+  let lockAcquired = false;
+
+  try {
+    await acquireLock(config.lockPath, logger);
+    lockAcquired = true;
+    logger.info("Štartujem Webshare crawler.", {
+      outputPath: config.outputPath,
+      checkpointPath: config.checkpointPath,
+      logPath: config.logPath,
+      healthPath: config.healthPath,
+    });
+
+    const result = await crawlAllVideos(config, logger, stats);
+    logger.info("Hotovo.", result);
+    logger.info("Štatistiky behu.", result.summary);
+  } catch (error) {
+    logger.error("Crawler spadol.", {
+      message: error.message,
+      stack: error.stack,
+      code: error.code || null,
+    });
+    await writeHealthReport(
+      config,
+      buildHealthReport({
+        success: false,
+        videos: 0,
+        durationSeconds: getDurationSeconds(stats),
+      })
+    );
+    process.exitCode = 1;
+  } finally {
+    if (lockAcquired) {
+      await releaseLock(config.lockPath, logger);
+    }
+    await logger.close();
+  }
+}
+
+main();
