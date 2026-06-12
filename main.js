@@ -22,8 +22,8 @@ const RETRY_COUNT = 5;
 const RETRY_BASE_DELAY_MS = 1000;
 const RETRY_MAX_DELAY_MS = 30000;
 const DEFAULT_OUTPUT_PATH = "/var/www/html/videos_all.json";
-const DIRECT_URL_BATCH_SIZE = 50;
 const CHECKPOINT_SAVE_INTERVAL = 1;
+const FILE_LINK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -59,6 +59,7 @@ function getConfig() {
     checkpointPath: path.join(runtimeDir, "webshare-crawler.checkpoint.json"),
     lockPath: path.join(runtimeDir, "webshare-crawler.lock"),
     healthPath: path.join(runtimeDir, "health.json"),
+    resolverCachePath: path.join(runtimeDir, "webshare-file-link-cache.json"),
   };
 }
 
@@ -102,6 +103,15 @@ function createLogger(logPath) {
     async close() {
       await new Promise((resolve) => stream.end(resolve));
     },
+  };
+}
+
+function createNoopLogger() {
+  return {
+    info() {},
+    warn() {},
+    error() {},
+    async close() {},
   };
 }
 
@@ -194,6 +204,7 @@ function normalizeFile(file) {
   const ident = file.ident?.[0];
   const name = file.name?.[0] || "";
   const size = Number.parseInt(file.size?.[0] || "0", 10);
+  const extension = path.extname(name).replace(/^\./, "").toLowerCase() || null;
 
   if (!ident || !Number.isFinite(size)) {
     return null;
@@ -201,8 +212,17 @@ function normalizeFile(file) {
 
   return {
     id: ident,
+    ident,
     name,
+    title: name,
     size,
+    extension,
+    mime: file.mime?.[0] || null,
+    type: file.type?.[0] || "video",
+    category: "video",
+    source: "webshare",
+    needsFileLink: true,
+    url: `webshare://${ident}`,
     direct_url: null,
   };
 }
@@ -351,7 +371,7 @@ function isValidFinalItem(item) {
       item.name &&
       Number.isFinite(item.size) &&
       item.size > 0 &&
-      item.direct_url
+      (item.url || item.direct_url)
   );
 }
 
@@ -460,7 +480,9 @@ class WebshareSession {
 }
 
 async function postXml(client, url, params, endpointName, stats) {
-  stats.apiRequests += 1;
+  if (stats) {
+    stats.apiRequests += 1;
+  }
   const response = await client.post(url, params.toString());
   const parsed = await parseStringPromise(response.data, {
     explicitArray: true,
@@ -511,6 +533,48 @@ async function resolveFileLink(client, ident, logger, stats) {
     logger,
     { shouldRetry: isRetryableFileLinkError }
   );
+}
+
+async function loadResolverCache(cachePath, logger) {
+  try {
+    const raw = await fsPromises.readFile(cachePath, "utf8");
+    return JSON.parse(raw);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      logger.warn("Resolver cache sa nepodarilo načítať, vytváram novú.", {
+        error: error.message,
+      });
+    }
+
+    return {};
+  }
+}
+
+async function saveResolverCache(cachePath, cache) {
+  await writeJsonAtomically(cachePath, cache);
+}
+
+function getCachedResolvedUrl(cache, ident) {
+  const entry = cache[ident];
+
+  if (!entry?.url || !entry?.expiresAt) {
+    return null;
+  }
+
+  if (Date.now() >= new Date(entry.expiresAt).getTime()) {
+    delete cache[ident];
+    return null;
+  }
+
+  return entry.url;
+}
+
+function setCachedResolvedUrl(cache, ident, url) {
+  cache[ident] = {
+    url,
+    expiresAt: new Date(Date.now() + FILE_LINK_CACHE_TTL_MS).toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 function shouldSplitPrefix(total, depth) {
@@ -689,43 +753,19 @@ function finalizeItems(itemsById, stats) {
     })
     .map((item) => ({
       id: item.id,
+      ident: item.ident,
       name: item.name,
+      title: item.title,
       size: item.size,
+      extension: item.extension,
+      mime: item.mime,
+      type: item.type,
+      category: item.category,
+      source: item.source,
+      needsFileLink: item.needsFileLink,
+      url: item.url,
       direct_url: item.direct_url,
     }));
-}
-
-async function resolveDirectUrls(client, state, config, logger, stats) {
-  const items = Object.values(state.itemsById).sort((left, right) =>
-    left.id.localeCompare(right.id, "en")
-  );
-
-  for (let index = state.resolvedIds || 0; index < items.length; index += 1) {
-    const item = items[index];
-
-    if (!item.direct_url) {
-      try {
-        item.direct_url = await resolveFileLink(client, item.id, logger, stats);
-      } catch (error) {
-        logger.warn(`Preskakujem ${item.id}, direct URL sa nepodarilo získať.`, {
-          error: error.message,
-          code: error.code || null,
-        });
-      }
-    }
-
-    state.resolvedIds = index + 1;
-
-    if (state.resolvedIds % DIRECT_URL_BATCH_SIZE === 0) {
-      logger.info("Ukladám checkpoint po batchi direct URL.", {
-        resolvedIds: state.resolvedIds,
-        total: items.length,
-      });
-      await saveCheckpoint(config.checkpointPath, state);
-    }
-  }
-
-  await saveCheckpoint(config.checkpointPath, state);
 }
 
 async function prepareRuntime(config) {
@@ -759,9 +799,6 @@ async function crawlAllVideos(config, logger, stats) {
     await crawlPrefixes(client, session, state, config, logger, stats);
   }
 
-  logger.info("Začínam resolve direct URL fázu.");
-  await resolveDirectUrls(client, state, config, logger, stats);
-
   const finalItems = finalizeItems(state.itemsById, stats);
   await writeJsonAtomically(config.outputPath, finalItems);
   await writeGzipFile(config.outputPath, finalItems);
@@ -781,6 +818,45 @@ async function crawlAllVideos(config, logger, stats) {
     logPath: config.logPath,
     healthPath: config.healthPath,
     summary: buildSummary(stats, finalItems.length),
+  };
+}
+
+async function resolveIdentToStreamUrl(ident, options = {}) {
+  const config = options.config || getConfig();
+  const logger = options.logger || createNoopLogger();
+  const stats = options.stats || null;
+
+  await prepareRuntime(config);
+
+  const cache = await loadResolverCache(config.resolverCachePath, logger);
+  const cachedUrl = getCachedResolvedUrl(cache, ident);
+
+  if (cachedUrl) {
+    logger.info(`Resolver cache hit pre ${ident}.`);
+    return cachedUrl;
+  }
+
+  const client = createApiClient();
+  const session = new WebshareSession(config, logger);
+  const resolvedUrl = await session.withWst(() =>
+    resolveFileLink(client, ident, logger, stats)
+  );
+
+  if (!resolvedUrl) {
+    throw new Error(`Pre ${ident} sa nepodarilo získať stream URL.`);
+  }
+
+  setCachedResolvedUrl(cache, ident, resolvedUrl);
+  await saveResolverCache(config.resolverCachePath, cache);
+
+  return resolvedUrl;
+}
+
+function createWebshareResolver(options = {}) {
+  return {
+    async resolve(ident) {
+      return resolveIdentToStreamUrl(ident, options);
+    },
   };
 }
 
@@ -827,4 +903,12 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  createWebshareResolver,
+  getConfig,
+  resolveIdentToStreamUrl,
+};
