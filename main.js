@@ -11,7 +11,8 @@ const LOGIN_URL = `${BASE_URL}/`;
 const SEARCH_URL = `${BASE_URL}/api/search/`;
 const FILE_LINK_URL = `${BASE_URL}/api/file_link/`;
 const SEARCH_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
-const ONE_GB = 1073741824;
+const MIN_VIDEO_SIZE = 1610612736;
+const MAX_VIDEO_SIZE = 10737418240;
 const PAGE_LIMIT = 100;
 const SEARCH_SPLIT_SENTINEL = 1000;
 const MAX_PREFIX_DEPTH = 5;
@@ -51,7 +52,8 @@ function getConfig() {
     username,
     password,
     outputPath,
-    sizeLimit: ONE_GB,
+    minSize: MIN_VIDEO_SIZE,
+    maxSize: MAX_VIDEO_SIZE,
     runtimeDir,
     logPath: path.join(runtimeDir, "webshare-crawler.log"),
     checkpointPath: path.join(runtimeDir, "webshare-crawler.checkpoint.json"),
@@ -524,7 +526,7 @@ function appendChildren(queue, prefix, depth) {
   }
 }
 
-function mergeItems(itemsById, files, sizeLimit, stats) {
+function mergeItems(itemsById, files, minSize, maxSize, stats) {
   let added = 0;
 
   for (const file of files) {
@@ -534,7 +536,7 @@ function mergeItems(itemsById, files, sizeLimit, stats) {
       stats.foundVideos += 1;
     }
 
-    if (!normalized || normalized.size < sizeLimit) {
+    if (!normalized || normalized.size < minSize || normalized.size > maxSize) {
       continue;
     }
 
@@ -587,7 +589,8 @@ async function fetchAllPagesForPrefix(
     addedForPrefix += mergeItems(
       state.itemsById,
       page.files,
-      config.sizeLimit,
+      config.minSize,
+      config.maxSize,
       stats
     );
 
@@ -737,7 +740,7 @@ async function writeHealthReport(config, report) {
 function buildSummary(stats, finalCount) {
   return {
     found_videos: stats.foundVideos,
-    filtered_videos_gte_1gb: stats.filteredVideos,
+      filtered_videos_1_5gb_to_10gb: stats.filteredVideos,
     duplicates_removed: stats.duplicateVideos,
     api_requests: stats.apiRequests,
     duration_seconds: getDurationSeconds(stats),
