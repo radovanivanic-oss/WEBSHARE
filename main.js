@@ -59,6 +59,7 @@ function getConfig() {
     checkpointPath: path.join(runtimeDir, "webshare-crawler.checkpoint.json"),
     lockPath: path.join(runtimeDir, "webshare-crawler.lock"),
     healthPath: path.join(runtimeDir, "health.json"),
+    failedPrefixesPath: path.join(runtimeDir, "failed-prefixes.json"),
     resolverCachePath: path.join(runtimeDir, "webshare-file-link-cache.json"),
   };
 }
@@ -198,6 +199,10 @@ function isRetryableFileLinkError(error) {
   }
 
   return ["FILE_LINK_FATAL_4", "FILE_LINK_FATAL_5"].includes(error.code);
+}
+
+function isHttp500Error(error) {
+  return error?.response?.status === 500;
 }
 
 function normalizeFile(file) {
@@ -554,6 +559,44 @@ async function saveResolverCache(cachePath, cache) {
   await writeJsonAtomically(cachePath, cache);
 }
 
+async function loadFailedPrefixes(failedPrefixesPath, logger) {
+  try {
+    const raw = await fsPromises.readFile(failedPrefixesPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      logger.warn("Failed prefixes sa nepodarilo načítať, vytváram nový zoznam.", {
+        error: error.message,
+      });
+    }
+
+    return [];
+  }
+}
+
+async function recordFailedPrefix(failedPrefixesPath, prefixEntry, error, logger) {
+  const failedPrefixes = await loadFailedPrefixes(failedPrefixesPath, logger);
+  const entry = {
+    prefix: prefixEntry.prefix,
+    depth: prefixEntry.depth,
+    status: error?.response?.status || null,
+    message: error.message,
+    recordedAt: new Date().toISOString(),
+  };
+  const existingIndex = failedPrefixes.findIndex(
+    (item) => item.prefix === prefixEntry.prefix && item.depth === prefixEntry.depth
+  );
+
+  if (existingIndex >= 0) {
+    failedPrefixes[existingIndex] = entry;
+  } else {
+    failedPrefixes.push(entry);
+  }
+
+  await writeJsonAtomically(failedPrefixesPath, failedPrefixes);
+}
+
 function getCachedResolvedUrl(cache, ident) {
   const entry = cache[ident];
 
@@ -676,49 +719,67 @@ async function fetchAllPagesForPrefix(
 async function crawlPrefixes(client, session, state, config, logger, stats) {
   while (state.queue.length > 0) {
     const prefixEntry = state.queue.shift();
-    const firstPage = await retry(
-      () =>
-        fetchSearchPage(client, session, {
-          prefix: prefixEntry.prefix,
-          offset: 0,
-          limit: PAGE_LIMIT,
-        }, stats),
-      `search ${prefixEntry.prefix}* metadata`,
-      logger
-    );
-
-    logger.info(`Analyzujem prefix ${prefixEntry.prefix}*`, {
-      depth: prefixEntry.depth,
-      totalHint: firstPage.total,
-      firstPageCount: firstPage.files.length,
-      queueLeft: state.queue.length,
-    });
-
-    if (firstPage.total === 0 || firstPage.files.length === 0) {
-      state.processedPrefixes += 1;
-      if (state.processedPrefixes % CHECKPOINT_SAVE_INTERVAL === 0) {
-        await saveCheckpoint(config.checkpointPath, state);
-      }
-      continue;
-    }
-
-    if (shouldSplitPrefix(firstPage.total, prefixEntry.depth)) {
-      appendChildren(state.queue, prefixEntry.prefix, prefixEntry.depth);
-      logger.info(`Prefix ${prefixEntry.prefix}* delím ďalej.`, {
-        childCount: SEARCH_CHARS.length,
-        newQueueSize: state.queue.length,
-      });
-    } else {
-      await fetchAllPagesForPrefix(
-        client,
-        session,
-        state,
-        prefixEntry,
-        firstPage,
-        config,
-        logger,
-        stats
+    try {
+      const firstPage = await retry(
+        () =>
+          fetchSearchPage(client, session, {
+            prefix: prefixEntry.prefix,
+            offset: 0,
+            limit: PAGE_LIMIT,
+          }, stats),
+        `search ${prefixEntry.prefix}* metadata`,
+        logger
       );
+
+      logger.info(`Analyzujem prefix ${prefixEntry.prefix}*`, {
+        depth: prefixEntry.depth,
+        totalHint: firstPage.total,
+        firstPageCount: firstPage.files.length,
+        queueLeft: state.queue.length,
+      });
+
+      if (firstPage.total === 0 || firstPage.files.length === 0) {
+        state.processedPrefixes += 1;
+        if (state.processedPrefixes % CHECKPOINT_SAVE_INTERVAL === 0) {
+          await saveCheckpoint(config.checkpointPath, state);
+        }
+        continue;
+      }
+
+      if (shouldSplitPrefix(firstPage.total, prefixEntry.depth)) {
+        appendChildren(state.queue, prefixEntry.prefix, prefixEntry.depth);
+        logger.info(`Prefix ${prefixEntry.prefix}* delím ďalej.`, {
+          childCount: SEARCH_CHARS.length,
+          newQueueSize: state.queue.length,
+        });
+      } else {
+        await fetchAllPagesForPrefix(
+          client,
+          session,
+          state,
+          prefixEntry,
+          firstPage,
+          config,
+          logger,
+          stats
+        );
+      }
+    } catch (error) {
+      if (!isHttp500Error(error)) {
+        throw error;
+      }
+
+      logger.error(`Prefix ${prefixEntry.prefix}* zlyhal s HTTP 500, preskakujem ho.`, {
+        depth: prefixEntry.depth,
+        error: error.message,
+      });
+      await recordFailedPrefix(
+        config.failedPrefixesPath,
+        prefixEntry,
+        error,
+        logger
+      );
+      logger.warn(`Prefix ${prefixEntry.prefix}* bol zapísaný do failed-prefixes.json.`);
     }
 
     state.processedPrefixes += 1;
