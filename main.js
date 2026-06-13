@@ -22,7 +22,8 @@ const RETRY_COUNT = 5;
 const RETRY_BASE_DELAY_MS = 1000;
 const RETRY_MAX_DELAY_MS = 30000;
 const DEFAULT_OUTPUT_PATH = "/var/www/html/videos_all.json";
-const CHECKPOINT_SAVE_INTERVAL = 1;
+const CHECKPOINT_SAVE_INTERVAL = 10;
+const PREFIX_CONCURRENCY = 3;
 const FILE_LINK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -300,6 +301,15 @@ async function loadCheckpoint(checkpointPath, logger) {
 async function saveCheckpoint(checkpointPath, state) {
   state.updatedAt = new Date().toISOString();
   await writeJsonAtomically(checkpointPath, state);
+}
+
+function createCheckpointSaver(checkpointPath) {
+  let writeChain = Promise.resolve();
+
+  return async function save(state) {
+    writeChain = writeChain.then(() => saveCheckpoint(checkpointPath, state));
+    await writeChain;
+  };
 }
 
 async function clearCheckpoint(checkpointPath, logger) {
@@ -716,82 +726,114 @@ async function fetchAllPagesForPrefix(
   }
 }
 
-async function crawlPrefixes(client, session, state, config, logger, stats) {
-  while (state.queue.length > 0) {
-    const prefixEntry = state.queue.shift();
-    try {
-      const firstPage = await retry(
-        () =>
-          fetchSearchPage(client, session, {
-            prefix: prefixEntry.prefix,
-            offset: 0,
-            limit: PAGE_LIMIT,
-          }, stats),
-        `search ${prefixEntry.prefix}* metadata`,
-        logger
-      );
+async function processPrefix(
+  client,
+  session,
+  state,
+  config,
+  logger,
+  stats,
+  prefixEntry,
+  saveCheckpointQueued
+) {
+  try {
+    const firstPage = await retry(
+      () =>
+        fetchSearchPage(client, session, {
+          prefix: prefixEntry.prefix,
+          offset: 0,
+          limit: PAGE_LIMIT,
+        }, stats),
+      `search ${prefixEntry.prefix}* metadata`,
+      logger
+    );
 
-      logger.info(`Analyzujem prefix ${prefixEntry.prefix}*`, {
-        depth: prefixEntry.depth,
-        totalHint: firstPage.total,
-        firstPageCount: firstPage.files.length,
-        queueLeft: state.queue.length,
-      });
+    logger.info(`Analyzujem prefix ${prefixEntry.prefix}*`, {
+      depth: prefixEntry.depth,
+      totalHint: firstPage.total,
+      firstPageCount: firstPage.files.length,
+      queueLeft: state.queue.length,
+    });
 
-      if (firstPage.total === 0 || firstPage.files.length === 0) {
-        state.processedPrefixes += 1;
-        if (state.processedPrefixes % CHECKPOINT_SAVE_INTERVAL === 0) {
-          await saveCheckpoint(config.checkpointPath, state);
-        }
-        continue;
-      }
-
-      if (shouldSplitPrefix(firstPage.total, prefixEntry.depth)) {
-        appendChildren(state.queue, prefixEntry.prefix, prefixEntry.depth);
-        logger.info(`Prefix ${prefixEntry.prefix}* delím ďalej.`, {
-          childCount: SEARCH_CHARS.length,
-          newQueueSize: state.queue.length,
-        });
-      } else {
-        await fetchAllPagesForPrefix(
-          client,
-          session,
-          state,
-          prefixEntry,
-          firstPage,
-          config,
-          logger,
-          stats
-        );
-      }
-    } catch (error) {
-      if (!isHttp500Error(error)) {
-        throw error;
-      }
-
-      logger.error(`Prefix ${prefixEntry.prefix}* zlyhal s HTTP 500, preskakujem ho.`, {
-        depth: prefixEntry.depth,
-        error: error.message,
-      });
-      await recordFailedPrefix(
-        config.failedPrefixesPath,
-        prefixEntry,
-        error,
-        logger
-      );
-      logger.warn(`Prefix ${prefixEntry.prefix}* bol zapísaný do failed-prefixes.json.`);
+    if (firstPage.total === 0 || firstPage.files.length === 0) {
+      return;
     }
 
+    if (shouldSplitPrefix(firstPage.total, prefixEntry.depth)) {
+      appendChildren(state.queue, prefixEntry.prefix, prefixEntry.depth);
+      logger.info(`Prefix ${prefixEntry.prefix}* delím ďalej.`, {
+        childCount: SEARCH_CHARS.length,
+        newQueueSize: state.queue.length,
+      });
+    } else {
+      await fetchAllPagesForPrefix(
+        client,
+        session,
+        state,
+        prefixEntry,
+        firstPage,
+        config,
+        logger,
+        stats
+      );
+    }
+  } catch (error) {
+    if (!isHttp500Error(error)) {
+      throw error;
+    }
+
+    logger.error(`Prefix ${prefixEntry.prefix}* zlyhal s HTTP 500, preskakujem ho.`, {
+      depth: prefixEntry.depth,
+      error: error.message,
+    });
+    await recordFailedPrefix(
+      config.failedPrefixesPath,
+      prefixEntry,
+      error,
+      logger
+    );
+    logger.warn(`Prefix ${prefixEntry.prefix}* bol zapísaný do failed-prefixes.json.`);
+  } finally {
     state.processedPrefixes += 1;
 
     if (state.processedPrefixes % CHECKPOINT_SAVE_INTERVAL === 0) {
-      await saveCheckpoint(config.checkpointPath, state);
+      await saveCheckpointQueued(state);
+    }
+  }
+}
+
+async function crawlPrefixes(client, session, state, config, logger, stats) {
+  const saveCheckpointQueued = createCheckpointSaver(config.checkpointPath);
+
+  async function worker(workerId) {
+    while (state.queue.length > 0) {
+      const prefixEntry = state.queue.shift();
+
+      if (!prefixEntry) {
+        return;
+      }
+
+      logger.info(`Worker ${workerId} spracúva prefix ${prefixEntry.prefix}*`);
+      await processPrefix(
+        client,
+        session,
+        state,
+        config,
+        logger,
+        stats,
+        prefixEntry,
+        saveCheckpointQueued
+      );
     }
   }
 
+  await Promise.all(
+    Array.from({ length: PREFIX_CONCURRENCY }, (_, index) => worker(index + 1))
+  );
+
   state.phase = "resolve";
   state.resolvedIds = 0;
-  await saveCheckpoint(config.checkpointPath, state);
+  await saveCheckpointQueued(state);
 }
 
 function finalizeItems(itemsById, stats) {
