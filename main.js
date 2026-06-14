@@ -1,8 +1,10 @@
 const axios = require("axios");
+const crypto = require("crypto");
 const fs = require("fs");
 const fsPromises = fs.promises;
 const path = require("path");
 const puppeteer = require("puppeteer");
+const readline = require("readline");
 const { parseStringPromise } = require("xml2js");
 const zlib = require("zlib");
 
@@ -25,6 +27,7 @@ const DEFAULT_OUTPUT_PATH = "/var/www/html/videos_all.json";
 const CHECKPOINT_SAVE_INTERVAL = 10;
 const PREFIX_CONCURRENCY = 3;
 const FILE_LINK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const SEEN_BUCKET_CACHE_LIMIT = 16;
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -62,6 +65,8 @@ function getConfig() {
     healthPath: path.join(runtimeDir, "health.json"),
     failedPrefixesPath: path.join(runtimeDir, "failed-prefixes.json"),
     resolverCachePath: path.join(runtimeDir, "webshare-file-link-cache.json"),
+    catalogJsonlPath: path.join(runtimeDir, "catalog-items.jsonl"),
+    seenIndexDir: path.join(runtimeDir, "seen-idents"),
   };
 }
 
@@ -125,11 +130,17 @@ function createRunStats() {
     filteredVideos: 0,
     duplicateVideos: 0,
     invalidItems: 0,
+    uniqueItems: 0,
   };
 }
 
 function getDurationSeconds(stats) {
   return Math.round((Date.now() - stats.startedAtMs) / 1000);
+}
+
+function getMemoryUsage() {
+  const { rss, heapUsed, heapTotal } = process.memoryUsage();
+  return { rss, heapUsed, heapTotal };
 }
 
 async function retry(fn, label, logger, options = {}) {
@@ -244,47 +255,167 @@ async function writeJsonAtomically(filePath, data) {
   await fsPromises.rename(tempPath, filePath);
 }
 
-async function writeGzipFile(filePath, data) {
-  const gzPath = `${filePath}.gz`;
-  const tempPath = `${gzPath}.tmp`;
-  const json = JSON.stringify(data, null, 2);
-  const gzipped = await new Promise((resolve, reject) => {
-    zlib.gzip(json, (error, buffer) => {
-      if (error) {
-        reject(error);
-        return;
-      }
+async function pathExists(targetPath) {
+  try {
+    await fsPromises.access(targetPath);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
 
-      resolve(buffer);
-    });
+async function removePathIfExists(targetPath) {
+  await fsPromises.rm(targetPath, { recursive: true, force: true });
+}
+
+async function writeToStream(stream, chunk) {
+  await new Promise((resolve, reject) => {
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      stream.off("error", onError);
+      stream.off("drain", onDrain);
+    };
+
+    stream.on("error", onError);
+
+    if (stream.write(chunk)) {
+      cleanup();
+      resolve();
+    } else {
+      stream.on("drain", onDrain);
+    }
   });
+}
 
-  await ensureDirectory(gzPath);
-  await fsPromises.writeFile(tempPath, gzipped);
-  await fsPromises.rename(tempPath, gzPath);
+async function closeWritableStream(stream) {
+  await new Promise((resolve, reject) => {
+    stream.on("error", reject);
+    stream.end(resolve);
+  });
+}
+
+class CatalogStore {
+  constructor(filePath) {
+    this.filePath = filePath;
+    this.writeChain = Promise.resolve();
+  }
+
+  async init() {
+    await ensureDirectory(this.filePath);
+  }
+
+  async appendMany(items) {
+    if (items.length === 0) {
+      return;
+    }
+
+    const payload = `${items.map((item) => JSON.stringify(item)).join("\n")}\n`;
+    this.writeChain = this.writeChain.then(() =>
+      fsPromises.appendFile(this.filePath, payload, "utf8")
+    );
+    await this.writeChain;
+  }
+
+  async flush() {
+    await this.writeChain;
+  }
+}
+
+class SeenIdentIndex {
+  constructor(directoryPath, logger) {
+    this.directoryPath = directoryPath;
+    this.logger = logger;
+    this.cache = new Map();
+  }
+
+  async init() {
+    await fsPromises.mkdir(this.directoryPath, { recursive: true });
+  }
+
+  getBucketName(ident) {
+    return crypto.createHash("md5").update(ident).digest("hex").slice(0, 2);
+  }
+
+  getBucketPath(bucketName) {
+    return path.join(this.directoryPath, `${bucketName}.jsonl`);
+  }
+
+  async ensureBucket(bucketName) {
+    const cached = this.cache.get(bucketName);
+
+    if (cached) {
+      this.cache.delete(bucketName);
+      this.cache.set(bucketName, cached);
+      return cached;
+    }
+
+    const bucketPath = this.getBucketPath(bucketName);
+    let set = new Set();
+
+    try {
+      const raw = await fsPromises.readFile(bucketPath, "utf8");
+      for (const line of raw.split("\n")) {
+        if (line) {
+          set.add(line);
+        }
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    this.cache.set(bucketName, { set });
+
+    if (this.cache.size > SEEN_BUCKET_CACHE_LIMIT) {
+      const oldestKey = this.cache.keys().next().value;
+      this.cache.delete(oldestKey);
+    }
+
+    return this.cache.get(bucketName);
+  }
+
+  async addIfNew(ident) {
+    const bucketName = this.getBucketName(ident);
+    const bucket = await this.ensureBucket(bucketName);
+
+    if (bucket.set.has(ident)) {
+      return false;
+    }
+
+    bucket.set.add(ident);
+    await fsPromises.appendFile(this.getBucketPath(bucketName), `${ident}\n`, "utf8");
+    return true;
+  }
 }
 
 function createInitialCheckpoint() {
   return {
-    version: 2,
+    version: 3,
     phase: "crawl",
     queue: SEARCH_CHARS.map((prefix) => ({ prefix, depth: 1 })),
     processedPrefixes: 0,
-    itemsById: {},
-    resolvedIds: 0,
+    uniqueItems: 0,
     updatedAt: new Date().toISOString(),
   };
 }
 
-async function loadCheckpoint(checkpointPath, logger) {
+async function loadCheckpointState(config, logger) {
   try {
-    const raw = await fsPromises.readFile(checkpointPath, "utf8");
+    const raw = await fsPromises.readFile(config.checkpointPath, "utf8");
     const parsed = JSON.parse(raw);
     logger.info("Našiel som checkpoint, pokračujem z neho.", {
       phase: parsed.phase,
       queued: parsed.queue?.length || 0,
-      items: Object.keys(parsed.itemsById || {}).length,
-      resolvedIds: parsed.resolvedIds || 0,
+      processedPrefixes: parsed.processedPrefixes || 0,
+      uniqueItems: parsed.uniqueItems || 0,
     });
     return parsed;
   } catch (error) {
@@ -294,6 +425,9 @@ async function loadCheckpoint(checkpointPath, logger) {
       });
     }
 
+    await removePathIfExists(config.catalogJsonlPath);
+    await removePathIfExists(config.seenIndexDir);
+    await removePathIfExists(config.failedPrefixesPath);
     return createInitialCheckpoint();
   }
 }
@@ -351,7 +485,10 @@ async function acquireLock(lockPath, logger) {
       throw error;
     }
   } catch (error) {
-    if (!["ENOENT"].includes(error.code) && error.code !== "CRAWLER_ALREADY_RUNNING") {
+    if (
+      !["ENOENT"].includes(error.code) &&
+      error.code !== "CRAWLER_ALREADY_RUNNING"
+    ) {
       logger.warn("Lock file sa nepodarilo načítať, prepíšem ho.", {
         error: error.message,
       });
@@ -396,6 +533,7 @@ function buildHealthReport({ success, videos, durationSeconds }) {
     generated_at: new Date().toISOString(),
     videos,
     duration_seconds: durationSeconds,
+    memory: getMemoryUsage(),
   };
 }
 
@@ -498,6 +636,7 @@ async function postXml(client, url, params, endpointName, stats) {
   if (stats) {
     stats.apiRequests += 1;
   }
+
   const response = await client.post(url, params.toString());
   const parsed = await parseStringPromise(response.data, {
     explicitArray: true,
@@ -643,8 +782,16 @@ function appendChildren(queue, prefix, depth) {
   }
 }
 
-function mergeItems(itemsById, files, minSize, maxSize, stats) {
-  let added = 0;
+async function mergeItems(
+  seenIndex,
+  catalogStore,
+  state,
+  files,
+  minSize,
+  maxSize,
+  stats
+) {
+  const newItems = [];
 
   for (const file of files) {
     const normalized = normalizeFile(file);
@@ -659,21 +806,28 @@ function mergeItems(itemsById, files, minSize, maxSize, stats) {
 
     stats.filteredVideos += 1;
 
-    if (!itemsById[normalized.id]) {
-      added += 1;
-    } else {
+    if (!(await seenIndex.addIfNew(normalized.id))) {
       stats.duplicateVideos += 1;
+      continue;
     }
 
-    itemsById[normalized.id] = normalized;
+    newItems.push(normalized);
+    stats.uniqueItems += 1;
   }
 
-  return added;
+  if (newItems.length > 0) {
+    await catalogStore.appendMany(newItems);
+    state.uniqueItems += newItems.length;
+  }
+
+  return newItems.length;
 }
 
 async function fetchAllPagesForPrefix(
   client,
   session,
+  seenIndex,
+  catalogStore,
   state,
   prefixEntry,
   firstPage,
@@ -689,11 +843,16 @@ async function fetchAllPagesForPrefix(
     if (offset > 0) {
       page = await retry(
         () =>
-          fetchSearchPage(client, session, {
-            prefix: prefixEntry.prefix,
-            offset,
-            limit: PAGE_LIMIT,
-          }, stats),
+          fetchSearchPage(
+            client,
+            session,
+            {
+              prefix: prefixEntry.prefix,
+              offset,
+              limit: PAGE_LIMIT,
+            },
+            stats
+          ),
         `search ${prefixEntry.prefix}* offset=${offset}`,
         logger
       );
@@ -703,8 +862,10 @@ async function fetchAllPagesForPrefix(
       break;
     }
 
-    addedForPrefix += mergeItems(
-      state.itemsById,
+    addedForPrefix += await mergeItems(
+      seenIndex,
+      catalogStore,
+      state,
       page.files,
       config.minSize,
       config.maxSize,
@@ -714,8 +875,9 @@ async function fetchAllPagesForPrefix(
     logger.info(`Prefix ${prefixEntry.prefix}* stránka ${offset / PAGE_LIMIT}`, {
       files: page.files.length,
       totalHint: page.total,
-      uniqueItems: Object.keys(state.itemsById).length,
+      uniqueItems: state.uniqueItems,
       addedForPrefix,
+      memory: getMemoryUsage(),
     });
 
     if (page.files.length < PAGE_LIMIT) {
@@ -729,6 +891,8 @@ async function fetchAllPagesForPrefix(
 async function processPrefix(
   client,
   session,
+  seenIndex,
+  catalogStore,
   state,
   config,
   logger,
@@ -739,11 +903,16 @@ async function processPrefix(
   try {
     const firstPage = await retry(
       () =>
-        fetchSearchPage(client, session, {
-          prefix: prefixEntry.prefix,
-          offset: 0,
-          limit: PAGE_LIMIT,
-        }, stats),
+        fetchSearchPage(
+          client,
+          session,
+          {
+            prefix: prefixEntry.prefix,
+            offset: 0,
+            limit: PAGE_LIMIT,
+          },
+          stats
+        ),
       `search ${prefixEntry.prefix}* metadata`,
       logger
     );
@@ -753,6 +922,7 @@ async function processPrefix(
       totalHint: firstPage.total,
       firstPageCount: firstPage.files.length,
       queueLeft: state.queue.length,
+      memory: getMemoryUsage(),
     });
 
     if (firstPage.total === 0 || firstPage.files.length === 0) {
@@ -769,6 +939,8 @@ async function processPrefix(
       await fetchAllPagesForPrefix(
         client,
         session,
+        seenIndex,
+        catalogStore,
         state,
         prefixEntry,
         firstPage,
@@ -802,7 +974,16 @@ async function processPrefix(
   }
 }
 
-async function crawlPrefixes(client, session, state, config, logger, stats) {
+async function crawlPrefixes(
+  client,
+  session,
+  seenIndex,
+  catalogStore,
+  state,
+  config,
+  logger,
+  stats
+) {
   const saveCheckpointQueued = createCheckpointSaver(config.checkpointPath);
 
   async function worker(workerId) {
@@ -817,6 +998,8 @@ async function crawlPrefixes(client, session, state, config, logger, stats) {
       await processPrefix(
         client,
         session,
+        seenIndex,
+        catalogStore,
         state,
         config,
         logger,
@@ -831,49 +1014,80 @@ async function crawlPrefixes(client, session, state, config, logger, stats) {
     Array.from({ length: PREFIX_CONCURRENCY }, (_, index) => worker(index + 1))
   );
 
-  state.phase = "resolve";
-  state.resolvedIds = 0;
+  await catalogStore.flush();
+  state.phase = "finalize";
   await saveCheckpointQueued(state);
 }
 
-function finalizeItems(itemsById, stats) {
-  return Object.values(itemsById)
-    .filter((item) => {
-      const valid = isValidFinalItem(item);
+async function streamCatalogToOutput(catalogJsonlPath, outputPath, stats) {
+  const jsonTempPath = `${outputPath}.tmp`;
+  const gzipOutputPath = `${outputPath}.gz`;
+  const gzipTempPath = `${gzipOutputPath}.tmp`;
 
-      if (!valid) {
-        stats.invalidItems += 1;
-      }
+  await ensureDirectory(outputPath);
+  await ensureDirectory(gzipOutputPath);
 
-      return valid;
-    })
-    .sort((left, right) => {
-      if (right.size !== left.size) {
-        return right.size - left.size;
-      }
+  const jsonStream = fs.createWriteStream(jsonTempPath, { encoding: "utf8" });
+  const gzipStream = zlib.createGzip();
+  const gzipFileStream = fs.createWriteStream(gzipTempPath);
+  gzipStream.pipe(gzipFileStream);
 
-      return left.name.localeCompare(right.name, "sk");
-    })
-    .map((item) => ({
-      id: item.id,
-      ident: item.ident,
-      name: item.name,
-      title: item.title,
-      size: item.size,
-      extension: item.extension,
-      mime: item.mime,
-      type: item.type,
-      category: item.category,
-      source: item.source,
-      needsFileLink: item.needsFileLink,
-      url: item.url,
-      direct_url: item.direct_url,
-    }));
+  const input = readline.createInterface({
+    input: fs.createReadStream(catalogJsonlPath, { encoding: "utf8" }),
+    crlfDelay: Infinity,
+  });
+
+  let validCount = 0;
+
+  await writeToStream(jsonStream, "[\n");
+  await writeToStream(gzipStream, "[\n");
+
+  for await (const line of input) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    let item;
+    try {
+      item = JSON.parse(line);
+    } catch (error) {
+      stats.invalidItems += 1;
+      continue;
+    }
+
+    if (!isValidFinalItem(item)) {
+      stats.invalidItems += 1;
+      continue;
+    }
+
+    const prefix = validCount === 0 ? "  " : ",\n  ";
+    const chunk = `${prefix}${JSON.stringify(item)}`;
+    await writeToStream(jsonStream, chunk);
+    await writeToStream(gzipStream, chunk);
+    validCount += 1;
+  }
+
+  await writeToStream(jsonStream, "\n]\n");
+  await writeToStream(gzipStream, "\n]\n");
+  await closeWritableStream(jsonStream);
+  await closeWritableStream(gzipStream);
+  await closeWritableStream(gzipFileStream);
+
+  await fsPromises.rename(jsonTempPath, outputPath);
+  await fsPromises.rename(gzipTempPath, gzipOutputPath);
+
+  return validCount;
 }
 
 async function prepareRuntime(config) {
   await fsPromises.mkdir(config.runtimeDir, { recursive: true });
   await ensureDirectory(config.outputPath);
+}
+
+async function cleanupIntermediateArtifacts(config, logger) {
+  await removePathIfExists(config.catalogJsonlPath);
+  await removePathIfExists(config.seenIndexDir);
+  logger.info("Dočasné crawl artefakty boli odstránené.");
 }
 
 async function writeHealthReport(config, report) {
@@ -883,44 +1097,65 @@ async function writeHealthReport(config, report) {
 function buildSummary(stats, finalCount) {
   return {
     found_videos: stats.foundVideos,
-      filtered_videos_1_5gb_to_10gb: stats.filteredVideos,
+    filtered_videos_1_5gb_to_10gb: stats.filteredVideos,
     duplicates_removed: stats.duplicateVideos,
     api_requests: stats.apiRequests,
     duration_seconds: getDurationSeconds(stats),
     final_videos: finalCount,
+    memory: getMemoryUsage(),
   };
 }
 
 async function crawlAllVideos(config, logger, stats) {
   await prepareRuntime(config);
+
   const client = createApiClient();
   const session = new WebshareSession(config, logger);
-  const state = await loadCheckpoint(config.checkpointPath, logger);
+  const catalogStore = new CatalogStore(config.catalogJsonlPath);
+  const seenIndex = new SeenIdentIndex(config.seenIndexDir, logger);
+  const state = await loadCheckpointState(config, logger);
+
+  await catalogStore.init();
+  await seenIndex.init();
 
   if (state.phase === "crawl") {
     logger.info("Začínam crawl fázu.");
-    await crawlPrefixes(client, session, state, config, logger, stats);
+    await crawlPrefixes(
+      client,
+      session,
+      seenIndex,
+      catalogStore,
+      state,
+      config,
+      logger,
+      stats
+    );
   }
 
-  const finalItems = finalizeItems(state.itemsById, stats);
-  await writeJsonAtomically(config.outputPath, finalItems);
-  await writeGzipFile(config.outputPath, finalItems);
+  logger.info("Začínam finalize fázu zo streamovaného JSONL katalógu.");
+  const finalCount = await streamCatalogToOutput(
+    config.catalogJsonlPath,
+    config.outputPath,
+    stats
+  );
+
   await writeHealthReport(
     config,
     buildHealthReport({
       success: true,
-      videos: finalItems.length,
+      videos: finalCount,
       durationSeconds: getDurationSeconds(stats),
     })
   );
   await clearCheckpoint(config.checkpointPath, logger);
+  await cleanupIntermediateArtifacts(config, logger);
 
   return {
-    count: finalItems.length,
+    count: finalCount,
     outputPath: config.outputPath,
     logPath: config.logPath,
     healthPath: config.healthPath,
-    summary: buildSummary(stats, finalItems.length),
+    summary: buildSummary(stats, finalCount),
   };
 }
 
@@ -978,6 +1213,8 @@ async function main() {
       checkpointPath: config.checkpointPath,
       logPath: config.logPath,
       healthPath: config.healthPath,
+      catalogJsonlPath: config.catalogJsonlPath,
+      seenIndexDir: config.seenIndexDir,
     });
 
     const result = await crawlAllVideos(config, logger, stats);
@@ -988,6 +1225,7 @@ async function main() {
       message: error.message,
       stack: error.stack,
       code: error.code || null,
+      memory: getMemoryUsage(),
     });
     await writeHealthReport(
       config,
