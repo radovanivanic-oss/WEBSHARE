@@ -217,6 +217,33 @@ function isHttp500Error(error) {
   return error?.response?.status === 500;
 }
 
+function classifyTemporarySearchError(error) {
+  const status = error?.response?.status || null;
+  const code = error?.code || null;
+
+  if (status === 500) {
+    return "http_500";
+  }
+
+  if ([502, 503, 504].includes(status)) {
+    return "temporary_http";
+  }
+
+  if (code === "ECONNABORTED" || code === "ETIMEDOUT") {
+    return "timeout";
+  }
+
+  if (["ECONNRESET", "ENOTFOUND", "EAI_AGAIN"].includes(code)) {
+    return "network";
+  }
+
+  return null;
+}
+
+function isTemporarySearchError(error) {
+  return Boolean(classifyTemporarySearchError(error));
+}
+
 function normalizeFile(file) {
   const ident = file.ident?.[0];
   const name = file.name?.[0] || "";
@@ -726,11 +753,14 @@ async function loadFailedPrefixes(failedPrefixesPath, logger) {
 
 async function recordFailedPrefix(failedPrefixesPath, prefixEntry, error, logger) {
   const failedPrefixes = await loadFailedPrefixes(failedPrefixesPath, logger);
+  const kind = classifyTemporarySearchError(error) || "unknown";
   const entry = {
     prefix: prefixEntry.prefix,
     depth: prefixEntry.depth,
     status: error?.response?.status || null,
+    code: error?.code || null,
     message: error.message,
+    kind,
     recordedAt: new Date().toISOString(),
   };
   const existingIndex = failedPrefixes.findIndex(
@@ -950,12 +980,17 @@ async function processPrefix(
       );
     }
   } catch (error) {
-    if (!isHttp500Error(error)) {
+    const kind = classifyTemporarySearchError(error);
+
+    if (!kind) {
       throw error;
     }
 
-    logger.error(`Prefix ${prefixEntry.prefix}* zlyhal s HTTP 500, preskakujem ho.`, {
+    logger.error(`Prefix ${prefixEntry.prefix}* zlyhal dočasnou chybou, preskakujem ho.`, {
       depth: prefixEntry.depth,
+      kind,
+      status: error?.response?.status || null,
+      code: error?.code || null,
       error: error.message,
     });
     await recordFailedPrefix(
@@ -964,7 +999,9 @@ async function processPrefix(
       error,
       logger
     );
-    logger.warn(`Prefix ${prefixEntry.prefix}* bol zapísaný do failed-prefixes.json.`);
+    logger.warn(`Prefix ${prefixEntry.prefix}* bol zapísaný do failed-prefixes.json.`, {
+      kind,
+    });
   } finally {
     state.processedPrefixes += 1;
 
