@@ -1,12 +1,17 @@
 const axios = require("axios");
 const crypto = require("crypto");
+const { execFile } = require("child_process");
 const fs = require("fs");
 const fsPromises = fs.promises;
+const os = require("os");
 const path = require("path");
 const puppeteer = require("puppeteer");
 const readline = require("readline");
+const util = require("util");
 const { parseStringPromise } = require("xml2js");
 const zlib = require("zlib");
+
+const execFileAsync = util.promisify(execFile);
 
 const BASE_URL = "https://webshare.cz";
 const LOGIN_URL = `${BASE_URL}/`;
@@ -45,6 +50,14 @@ function getConfig() {
   const username = process.env.WEBSHARE_USERNAME;
   const password = process.env.WEBSHARE_PASSWORD;
   const outputPath = process.env.OUTPUT_JSON_PATH || DEFAULT_OUTPUT_PATH;
+  const githubExportEnabled = process.env.GITHUB_EXPORT_ENABLED === "true";
+  const githubExportBranch = process.env.GITHUB_EXPORT_BRANCH || "data";
+  const githubExportRepoUrl = process.env.GITHUB_EXPORT_REPO_URL || null;
+  const githubExportToken = process.env.GITHUB_EXPORT_TOKEN || null;
+  const githubExportName =
+    process.env.GITHUB_EXPORT_NAME || "webshare-crawler-bot";
+  const githubExportEmail =
+    process.env.GITHUB_EXPORT_EMAIL || "webshare-crawler@example.invalid";
 
   if (!username || !password) {
     throw new Error("Chýba WEBSHARE_USERNAME alebo WEBSHARE_PASSWORD.");
@@ -67,6 +80,12 @@ function getConfig() {
     resolverCachePath: path.join(runtimeDir, "webshare-file-link-cache.json"),
     catalogJsonlPath: path.join(runtimeDir, "catalog-items.jsonl"),
     seenIndexDir: path.join(runtimeDir, "seen-idents"),
+    githubExportEnabled,
+    githubExportBranch,
+    githubExportRepoUrl,
+    githubExportToken,
+    githubExportName,
+    githubExportEmail,
   };
 }
 
@@ -282,6 +301,11 @@ async function writeJsonAtomically(filePath, data) {
   await fsPromises.rename(tempPath, filePath);
 }
 
+async function copyFile(sourcePath, targetPath) {
+  await ensureDirectory(targetPath);
+  await fsPromises.copyFile(sourcePath, targetPath);
+}
+
 async function pathExists(targetPath) {
   try {
     await fsPromises.access(targetPath);
@@ -293,6 +317,10 @@ async function pathExists(targetPath) {
 
 async function removePathIfExists(targetPath) {
   await fsPromises.rm(targetPath, { recursive: true, force: true });
+}
+
+async function runGitCommand(args, options = {}) {
+  await execFileAsync("git", args, options);
 }
 
 async function writeToStream(stream, chunk) {
@@ -1131,6 +1159,118 @@ async function writeHealthReport(config, report) {
   await writeJsonAtomically(config.healthPath, report);
 }
 
+function buildAuthenticatedRepoUrl(config, repoUrl) {
+  if (!repoUrl) {
+    return null;
+  }
+
+  if (!config.githubExportToken) {
+    return repoUrl;
+  }
+
+  if (!repoUrl.startsWith("https://")) {
+    return repoUrl;
+  }
+
+  const escapedToken = encodeURIComponent(config.githubExportToken);
+  return repoUrl.replace("https://", `https://${escapedToken}@`);
+}
+
+async function getCurrentRepoRemoteUrl(config, logger) {
+  if (config.githubExportRepoUrl) {
+    return config.githubExportRepoUrl;
+  }
+
+  try {
+    const { stdout } = await runGitCommand(["remote", "get-url", "origin"], {
+      cwd: process.cwd(),
+    });
+    return stdout.trim();
+  } catch (error) {
+    logger.warn("Nepodarilo sa zistiť git remote origin.", {
+      error: error.message,
+    });
+    return null;
+  }
+}
+
+async function publishExportsToGithub(config, logger) {
+  if (!config.githubExportEnabled) {
+    logger.info("GitHub export je vypnutý.");
+    return null;
+  }
+
+  const repoUrl = await getCurrentRepoRemoteUrl(config, logger);
+
+  if (!repoUrl) {
+    throw new Error(
+      "GitHub export je zapnutý, ale chýba GITHUB_EXPORT_REPO_URL a nepodarilo sa zistiť origin."
+    );
+  }
+
+  const authenticatedRepoUrl = buildAuthenticatedRepoUrl(config, repoUrl);
+  const tempRoot = await fsPromises.mkdtemp(
+    path.join(os.tmpdir(), "webshare-export-")
+  );
+  const exportDir = path.join(tempRoot, "repo");
+
+  try {
+    await fsPromises.mkdir(exportDir, { recursive: true });
+    await runGitCommand(["init", "-b", config.githubExportBranch], {
+      cwd: exportDir,
+    });
+    await runGitCommand(["config", "user.name", config.githubExportName], {
+      cwd: exportDir,
+    });
+    await runGitCommand(["config", "user.email", config.githubExportEmail], {
+      cwd: exportDir,
+    });
+
+    await copyFile(
+      config.outputPath,
+      path.join(exportDir, path.basename(config.outputPath))
+    );
+    await copyFile(
+      `${config.outputPath}.gz`,
+      path.join(exportDir, `${path.basename(config.outputPath)}.gz`)
+    );
+    await copyFile(
+      config.healthPath,
+      path.join(exportDir, path.basename(config.healthPath))
+    );
+    await fsPromises.writeFile(path.join(exportDir, ".nojekyll"), "", "utf8");
+
+    await runGitCommand(["add", "."], { cwd: exportDir });
+    await runGitCommand(
+      [
+        "commit",
+        "-m",
+        `Update Webshare export ${new Date().toISOString()}`,
+      ],
+      { cwd: exportDir }
+    );
+    await runGitCommand(["remote", "add", "origin", authenticatedRepoUrl], {
+      cwd: exportDir,
+    });
+    await runGitCommand(
+      ["push", "--force", "origin", `HEAD:${config.githubExportBranch}`],
+      { cwd: exportDir }
+    );
+
+    logger.info("GitHub export branch bola úspešne aktualizovaná.", {
+      branch: config.githubExportBranch,
+      repoUrl,
+    });
+
+    return {
+      branch: config.githubExportBranch,
+      repoUrl,
+    };
+  } finally {
+    await removePathIfExists(tempRoot);
+  }
+}
+
 function buildSummary(stats, finalCount) {
   return {
     found_videos: stats.foundVideos,
@@ -1184,6 +1324,7 @@ async function crawlAllVideos(config, logger, stats) {
       durationSeconds: getDurationSeconds(stats),
     })
   );
+  const githubExport = await publishExportsToGithub(config, logger);
   await clearCheckpoint(config.checkpointPath, logger);
   await cleanupIntermediateArtifacts(config, logger);
 
@@ -1192,6 +1333,7 @@ async function crawlAllVideos(config, logger, stats) {
     outputPath: config.outputPath,
     logPath: config.logPath,
     healthPath: config.healthPath,
+    githubExport,
     summary: buildSummary(stats, finalCount),
   };
 }
