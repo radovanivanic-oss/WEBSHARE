@@ -1430,5 +1430,6 @@ if (require.main === module) {
 module.exports = {
   createWebshareResolver,
   getConfig,
+  publishExportsToGithub,
   resolveIdentToStreamUrl,
 };
