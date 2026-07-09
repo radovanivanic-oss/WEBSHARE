@@ -1,6 +1,6 @@
-# Webshare Atlas Kodi Addon
+# AG Kino Kodi Addon
 
-Webshare Atlas je Kodi video addon nad lokálnym exportom z Webshare crawlera.
+AG Kino je Kodi video addon nad lokálnym exportom z Webshare crawlera.
 
 Crawler ostáva oddelený:
 
@@ -116,7 +116,7 @@ Kodi update z lokálneho ZIPu funguje spoľahlivo vtedy, keď je verzia v `addon
 
 Hotové:
 
-- vlastná identita a menu Webshare Atlas
+- vlastná identita a menu AG Kino
 - lokálny SQLite index
 - gzip/json katalóg s fallbackom
 - lokálne fulltextové hľadanie

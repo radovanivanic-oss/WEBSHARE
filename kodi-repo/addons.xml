@@ -2,8 +2,8 @@
 <addons>
 <addon
   id="plugin.video.websharecrawler"
-  name="Webshare Atlas"
-  version="0.5.4"
+  name="AG Kino"
+  version="0.5.6"
   provider-name="Radeco">
   <requires>
     <import addon="xbmc.python" version="3.0.0"/>
@@ -13,7 +13,7 @@
   </extension>
   <extension point="xbmc.service" library="service.py" start="login"/>
   <extension point="xbmc.addon.metadata">
-    <summary lang="sk_SK">Webshare Atlas lokálny katalóg.</summary>
+    <summary lang="sk_SK">AG Kino lokálny katalóg.</summary>
     <description lang="sk_SK">Rýchly lokálny index nad Webshare crawler katalógom so searchom, históriou, obľúbenými a resolverom až pri kliknutí.</description>
     <platform>all</platform>
     <license>MIT</license>
