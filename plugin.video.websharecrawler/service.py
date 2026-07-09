@@ -42,7 +42,7 @@ def set_setting(key, value):
 def credential_hash(username, password):
     if not username or not password:
         return ""
-    raw = "{}\0{}".format(username, password).encode("utf-8")
+    raw = "webshare-md5crypt-v1\0{}\0{}".format(username, password).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 

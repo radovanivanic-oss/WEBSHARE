@@ -19,6 +19,8 @@ LOGIN_URL = BASE_URL + "/api/login/"
 FILE_LINK_URL = BASE_URL + "/api/file_link/"
 USER_DATA_URL = BASE_URL + "/api/user_data/"
 USER_AGENT = "Kodi Webshare Crawler Catalog/0.1"
+MD5_CRYPT_MAGIC = "$1$"
+ITOA64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 
 class ResolverError(Exception):
@@ -63,10 +65,77 @@ def _post_xml(url, payload):
     return root
 
 
+def _to64(value, length):
+    result = ""
+    while length > 0:
+        result += ITOA64[value & 0x3F]
+        value >>= 6
+        length -= 1
+    return result
+
+
+def _md5_crypt(password, salt):
+    password_bytes = password.encode("utf-8")
+    salt = salt.split("$")[0][:8]
+    salt_bytes = salt.encode("utf-8")
+    magic_bytes = MD5_CRYPT_MAGIC.encode("ascii")
+
+    ctx = hashlib.md5()
+    ctx.update(password_bytes)
+    ctx.update(magic_bytes)
+    ctx.update(salt_bytes)
+
+    alternate = hashlib.md5()
+    alternate.update(password_bytes)
+    alternate.update(salt_bytes)
+    alternate.update(password_bytes)
+    final = alternate.digest()
+
+    password_length = len(password_bytes)
+    remaining = password_length
+    while remaining > 0:
+        ctx.update(final[: min(16, remaining)])
+        remaining -= 16
+
+    i = password_length
+    while i > 0:
+        if i & 1:
+            ctx.update(b"\x00")
+        else:
+            ctx.update(password_bytes[:1])
+        i >>= 1
+
+    final = ctx.digest()
+
+    for i in range(1000):
+        loop = hashlib.md5()
+        if i & 1:
+            loop.update(password_bytes)
+        else:
+            loop.update(final)
+        if i % 3:
+            loop.update(salt_bytes)
+        if i % 7:
+            loop.update(password_bytes)
+        if i & 1:
+            loop.update(final)
+        else:
+            loop.update(password_bytes)
+        final = loop.digest()
+
+    passwd = ""
+    passwd += _to64((final[0] << 16) | (final[6] << 8) | final[12], 4)
+    passwd += _to64((final[1] << 16) | (final[7] << 8) | final[13], 4)
+    passwd += _to64((final[2] << 16) | (final[8] << 8) | final[14], 4)
+    passwd += _to64((final[3] << 16) | (final[9] << 8) | final[15], 4)
+    passwd += _to64((final[4] << 16) | (final[10] << 8) | final[5], 4)
+    passwd += _to64(final[11], 2)
+
+    return "{}{}${}".format(MD5_CRYPT_MAGIC, salt, passwd)
+
+
 def _webshare_password_hash(password, salt):
-    md5_password = hashlib.md5(password.encode("utf-8")).hexdigest()
-    salted = (md5_password + salt).encode("utf-8")
-    return hashlib.sha1(salted).hexdigest()
+    return hashlib.sha1(_md5_crypt(password, salt).encode("utf-8")).hexdigest()
 
 
 class WebshareResolver(object):
