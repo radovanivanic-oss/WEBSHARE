@@ -184,7 +184,7 @@ class AtlasStore(object):
     def query_items(self, params, limit=50, offset=0):
         where = []
         values = []
-        order = "added_order DESC"
+        order = "added_order ASC"
         preset = params.get("preset")
 
         if params.get("q"):
@@ -236,7 +236,7 @@ class AtlasStore(object):
         elif preset == "random":
             order = "RANDOM()"
         elif preset == "recent":
-            order = "added_order DESC"
+            order = "added_order ASC"
         elif preset == "title":
             order = "title COLLATE NOCASE ASC"
         elif preset == "episode":
@@ -253,14 +253,14 @@ class AtlasStore(object):
         return rows[:limit], len(rows) > limit
 
     def series_titles(self, limit=50, offset=0, preset="recent"):
-        order = "latest_order DESC"
+        order = "latest_order ASC"
         if preset == "title":
             order = "series_title COLLATE NOCASE ASC"
 
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT series_title, COUNT(*) AS count, MAX(added_order) AS latest_order
+                SELECT series_title, COUNT(*) AS count, MIN(added_order) AS latest_order
                 FROM items
                 WHERE media_type = 'episode' AND series_title IS NOT NULL AND series_title != ''
                 GROUP BY series_title
@@ -275,11 +275,11 @@ class AtlasStore(object):
         with self.connect() as conn:
             return conn.execute(
                 """
-                SELECT season, COUNT(*) AS count, MAX(added_order) AS latest_order
+                SELECT season, COUNT(*) AS count, MIN(added_order) AS latest_order
                 FROM items
                 WHERE series_title = ?
                 GROUP BY season
-                ORDER BY latest_order DESC, season DESC
+                ORDER BY latest_order ASC, season DESC
                 """,
                 (series_title,),
             ).fetchall()

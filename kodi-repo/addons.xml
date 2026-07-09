@@ -3,7 +3,7 @@
 <addon
   id="plugin.video.websharecrawler"
   name="AG Kino"
-  version="0.5.7"
+  version="0.5.8"
   provider-name="Radeco">
   <requires>
     <import addon="xbmc.python" version="3.0.0"/>
