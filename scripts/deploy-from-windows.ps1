@@ -1,3 +1,5 @@
 $ErrorActionPreference = "Stop"
 
-ssh radeco@tb "bash /home/radeco/webshare-crawler/scripts/deploy-server.sh"
+. "$PSScriptRoot\deploy-config.ps1"
+
+ssh $ServerTarget "bash $RemoteDeployScript"
