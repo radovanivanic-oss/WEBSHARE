@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addons>
+<addon
+  id="plugin.video.websharecrawler"
+  name="Webshare Atlas"
+  version="0.5.1"
+  provider-name="Radeco">
+  <requires>
+    <import addon="xbmc.python" version="3.0.0"/>
+  </requires>
+  <extension point="xbmc.python.pluginsource" library="default.py">
+    <provides>video</provides>
+  </extension>
+  <extension point="xbmc.service" library="service.py" start="login"/>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="sk_SK">Webshare Atlas lokálny katalóg.</summary>
+    <description lang="sk_SK">Rýchly lokálny index nad Webshare crawler katalógom so searchom, históriou, obľúbenými a resolverom až pri kliknutí.</description>
+    <platform>all</platform>
+    <license>MIT</license>
+  </extension>
+</addon>
+<addon
+  id="repository.websharecrawler"
+  name="Webshare Crawler Repository"
+  version="1.0.2"
+  provider-name="Radeco">
+  <extension point="xbmc.addon.repository" name="Webshare Crawler Repository">
+    <dir minversion="19.0.0">
+      <info compressed="false">https://raw.githubusercontent.com/radovanivanic-oss/WEBSHARE/main/kodi-repo/addons.xml</info>
+      <checksum>https://raw.githubusercontent.com/radovanivanic-oss/WEBSHARE/main/kodi-repo/addons.xml.md5</checksum>
+      <datadir zip="true">https://raw.githubusercontent.com/radovanivanic-oss/WEBSHARE/main/kodi-repo/</datadir>
+    </dir>
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="sk_SK">Repozitár pre Webshare Crawler Kodi addon.</summary>
+    <description lang="sk_SK">GitHub repozitár pre aktualizácie addonu plugin.video.websharecrawler.</description>
+    <platform>all</platform>
+    <license>MIT</license>
+  </extension>
+</addon>
+</addons>

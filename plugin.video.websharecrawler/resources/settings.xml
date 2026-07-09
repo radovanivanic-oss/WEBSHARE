@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<settings>
+  <category label="Účty">
+    <setting id="username" type="text" label="Používateľské meno Webshare" default=""/>
+    <setting id="password" type="text" label="Heslo Webshare" option="hidden" default=""/>
+  </category>
+
+  <category label="Streamy">
+    <setting id="catalog_url" type="text" label="Primárny katalóg (.json.gz)" default="http://192.168.2.226/videos_all.json.gz"/>
+    <setting id="fallback_catalog_url" type="text" label="Záložný katalóg (.json)" default="http://192.168.2.226/videos_all.json"/>
+    <setting id="show_old_menu" type="bool" label="Zobraziť jednoduché menu" default="false"/>
+    <setting id="stream_autoselect" type="bool" label="Automatický výber streamu" default="true"/>
+    <setting id="cache_ttl_hours" type="number" label="Platnosť stream cache v hodinách" default="6"/>
+    <setting id="page_size" type="number" label="Počet položiek na stránku" default="50"/>
+    <setting id="prefer_language" type="labelenum" label="Primárny jazyk" values="Bez preferencie|CZ|SK|CZ/SK|EN|Multi" default="0"/>
+    <setting id="secondary_language" type="labelenum" label="Sekundárny jazyk" values="Bez preferencie|CZ|SK|CZ/SK|EN|Multi" default="0"/>
+    <setting id="prefer_quality" type="labelenum" label="Maximálna / preferovaná kvalita" values="Bez preferencie|2160p|1080p|720p|SD" default="0"/>
+    <setting id="exclude_hdr" type="bool" label="Vynechať HDR podľa názvu" default="false"/>
+    <setting id="exclude_dolbyvision" type="bool" label="Vynechať Dolby Vision podľa názvu" default="false"/>
+  </category>
+
+  <category label="Priečinky">
+    <setting id="movie_library_path" type="text" label="Priečinok knižnice filmov" default=""/>
+    <setting id="tvshow_library_path" type="text" label="Priečinok knižnice seriálov" default=""/>
+  </category>
+
+  <category label="Rodičovský zámok">
+    <setting id="parental_enabled" type="bool" label="Zapnúť rodičovský zámok" default="false"/>
+    <setting id="parental_pin" type="text" label="PIN" option="hidden" default="" enable="eq(-1,true)"/>
+  </category>
+
+  <category label="Trakt.tv">
+    <setting id="trakt_enabled" type="bool" label="Zapnúť Trakt.tv integráciu" default="false"/>
+    <setting id="trakt_status" type="text" label="Stav" default="Zatiaľ nepripojené" enable="false"/>
+  </category>
+
+  <category label="Nástroje">
+    <setting id="auto_index" type="bool" label="Automaticky indexovať pri prvom spustení" default="true"/>
+    <setting type="action" label="Preindexovať katalóg" action="RunPlugin(plugin://plugin.video.websharecrawler?action=reindex)"/>
+    <setting type="action" label="Vymazať lokálny index" action="RunPlugin(plugin://plugin.video.websharecrawler?action=clear_index)"/>
+    <setting type="action" label="Vymazať resolver cache" action="RunPlugin(plugin://plugin.video.websharecrawler?action=clear_resolver_cache)"/>
+    <setting type="action" label="Vymazať históriu" action="RunPlugin(plugin://plugin.video.websharecrawler?action=clear_history)"/>
+    <setting type="action" label="Obnoviť skryté položky" action="RunPlugin(plugin://plugin.video.websharecrawler?action=reset_hidden_home)"/>
+  </category>
+</settings>
