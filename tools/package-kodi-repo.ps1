@@ -26,11 +26,16 @@ function New-KodiZip([string]$SourceDir, [string]$ZipPath) {
   $parent = Split-Path -Parent $SourceDir
   $zip = [System.IO.Compression.ZipFile]::Open($ZipPath, [System.IO.Compression.ZipArchiveMode]::Create)
   try {
-    Get-ChildItem -LiteralPath $SourceDir -Recurse -File | ForEach-Object {
+    Get-ChildItem -LiteralPath $SourceDir -Recurse -File |
+      Where-Object {
+        $_.FullName -notmatch "\\__pycache__\\" -and
+        $_.Extension -notin @(".pyc", ".pyo")
+      } |
+      ForEach-Object {
       $relative = $_.FullName.Substring($parent.Length).TrimStart("\", "/")
       $entryName = $relative -replace "\\", "/"
       [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $entryName) | Out-Null
-    }
+      }
   }
   finally {
     $zip.Dispose()

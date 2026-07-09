@@ -213,7 +213,7 @@ def quick_menu():
 
 
 def movies_menu():
-    add_directory("Všetky filmy", "list", {"media_type": "movie"})
+    add_directory("Všetky filmy", "list", {"media_type": "movie", "preset": "recent"})
     add_directory("Novinky", "list", {"media_type": "movie", "preset": "recent"})
     add_directory("Roky", "years", {"media_type": "movie"})
     add_directory("Žánre", "genres", {"media_type": "movie"})
@@ -227,7 +227,8 @@ def movies_menu():
 
 
 def series_menu():
-    add_directory("Všetky seriály", "series_titles")
+    add_directory("Všetky seriály", "series_titles", {"preset": "recent"})
+    add_directory("Seriály A-Z", "series_titles", {"preset": "title"})
     add_directory("Rozpozerané seriály", "continue", {"media_type": "episode"})
     add_directory("Nové epizódy", "list", {"media_type": "episode", "preset": "recent"})
     add_directory("Roky", "years", {"media_type": "episode"})
@@ -574,7 +575,11 @@ def series_titles(params):
     page = int(params.get("page", "0"))
     limit = page_size()
     offset = page * limit
-    rows, has_more = store().series_titles(limit=limit, offset=offset)
+    rows, has_more = store().series_titles(
+        limit=limit,
+        offset=offset,
+        preset=params.get("preset", "recent"),
+    )
     for row in rows:
         add_directory(
             "{} ({})".format(row["series_title"], row["count"]),
@@ -593,7 +598,11 @@ def series_detail(params):
         return
     for season in seasons:
         label = "Séria {}".format(season["season"] or "?")
-        add_directory(label, "list", {"series_title": title, "season": season["season"] or 0})
+        add_directory(
+            label,
+            "list",
+            {"series_title": title, "season": season["season"] or 0, "preset": "episode"},
+        )
     xbmcplugin.endOfDirectory(HANDLE)
 
 

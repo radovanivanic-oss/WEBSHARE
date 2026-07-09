@@ -192,7 +192,6 @@ class AtlasStore(object):
             for word in words:
                 where.append("search_text LIKE ?")
                 values.append("%{}%".format(word))
-            order = "title COLLATE NOCASE ASC"
 
         for key in (
             "media_type",
@@ -240,6 +239,8 @@ class AtlasStore(object):
             order = "added_order DESC"
         elif preset == "title":
             order = "title COLLATE NOCASE ASC"
+        elif preset == "episode":
+            order = "season ASC, episode ASC, added_order ASC"
 
         sql = "SELECT * FROM items"
         if where:
@@ -251,17 +252,21 @@ class AtlasStore(object):
             rows = conn.execute(sql, values).fetchall()
         return rows[:limit], len(rows) > limit
 
-    def series_titles(self, limit=50, offset=0):
+    def series_titles(self, limit=50, offset=0, preset="recent"):
+        order = "latest_order DESC"
+        if preset == "title":
+            order = "series_title COLLATE NOCASE ASC"
+
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT series_title, COUNT(*) AS count
+                SELECT series_title, COUNT(*) AS count, MAX(added_order) AS latest_order
                 FROM items
                 WHERE media_type = 'episode' AND series_title IS NOT NULL AND series_title != ''
                 GROUP BY series_title
-                ORDER BY series_title COLLATE NOCASE ASC
+                ORDER BY {}
                 LIMIT ? OFFSET ?
-                """,
+                """.format(order),
                 (limit + 1, offset),
             ).fetchall()
         return rows[:limit], len(rows) > limit
@@ -270,11 +275,11 @@ class AtlasStore(object):
         with self.connect() as conn:
             return conn.execute(
                 """
-                SELECT season, COUNT(*) AS count
+                SELECT season, COUNT(*) AS count, MAX(added_order) AS latest_order
                 FROM items
                 WHERE series_title = ?
                 GROUP BY season
-                ORDER BY season ASC
+                ORDER BY latest_order DESC, season DESC
                 """,
                 (series_title,),
             ).fetchall()
