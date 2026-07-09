@@ -17,6 +17,7 @@ BASE_URL = "https://webshare.cz"
 SALT_URL = BASE_URL + "/api/salt/"
 LOGIN_URL = BASE_URL + "/api/login/"
 FILE_LINK_URL = BASE_URL + "/api/file_link/"
+USER_DATA_URL = BASE_URL + "/api/user_data/"
 USER_AGENT = "Kodi Webshare Crawler Catalog/0.1"
 
 
@@ -104,6 +105,25 @@ class WebshareResolver(object):
         self._set_cached_url(ident, link)
         return link
 
+    def check_account(self):
+        token = self._get_wst(force=True)
+        response = _post_xml(USER_DATA_URL, {"wst": token})
+        vip = _text(response, "vip", "0") == "1"
+        vip_days = _text(response, "vip_days", "0")
+        vip_hours = _text(response, "vip_hours", "0")
+        vip_minutes = _text(response, "vip_minutes", "0")
+        vip_until = _text(response, "vip_until", "")
+        return {
+            "logged_in": True,
+            "token": token,
+            "token_masked": _mask_token(token),
+            "vip": vip,
+            "vip_days": vip_days,
+            "vip_hours": vip_hours,
+            "vip_minutes": vip_minutes,
+            "vip_until": vip_until,
+        }
+
     def _load_json(self, path, default):
         try:
             with open(path, "r", encoding="utf-8") as handle:
@@ -142,11 +162,11 @@ class WebshareResolver(object):
         }
         self._save_json(self.cache_path, cache)
 
-    def _get_wst(self):
+    def _get_wst(self, force=False):
         cached = self._load_json(self.wst_path, {})
         token = cached.get("wst")
         expires_at = int(cached.get("expires_at") or 0)
-        if token and expires_at > int(time.time()):
+        if not force and token and expires_at > int(time.time()):
             return token
 
         token = self._login()
@@ -201,3 +221,11 @@ class WebshareResolver(object):
         if not link:
             raise ResolverError("Webshare nevrátil stream link")
         return link
+
+
+def _mask_token(token):
+    if not token:
+        return "-"
+    if len(token) <= 8:
+        return "*" * len(token)
+    return "{}...{}".format(token[:4], token[-4:])

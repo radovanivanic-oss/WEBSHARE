@@ -3,6 +3,11 @@
   <category label="Účty">
     <setting id="username" type="text" label="Používateľské meno Webshare" default=""/>
     <setting id="password" type="text" label="Heslo Webshare" option="hidden" default=""/>
+    <setting id="account_status" type="text" label="Stav prihlásenia" default="Neoverené" enable="false"/>
+    <setting id="vip_remaining" type="text" label="Počet zostávajúcich dní predplatného" default="-" enable="false"/>
+    <setting id="wst_status" type="text" label="Token Webshare" default="-" enable="false"/>
+    <setting id="vip_until" type="text" label="VIP platí do" default="-" enable="false"/>
+    <setting id="account_checked_at" type="text" label="Naposledy overené" default="-" enable="false"/>
   </category>
 
   <category label="Streamy">
