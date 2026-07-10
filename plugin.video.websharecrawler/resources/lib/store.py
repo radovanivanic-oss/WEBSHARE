@@ -95,6 +95,25 @@ class AtlasStore(object):
                   payload TEXT,
                   updated_at INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS movie_metadata_cache (
+                  movie_key TEXT PRIMARY KEY,
+                  tmdb_id INTEGER,
+                  title TEXT,
+                  original_title TEXT,
+                  year INTEGER,
+                  overview TEXT,
+                  genres TEXT,
+                  rating REAL,
+                  runtime INTEGER,
+                  countries TEXT,
+                  director TEXT,
+                  cast TEXT,
+                  poster TEXT,
+                  backdrop TEXT,
+                  language TEXT,
+                  payload TEXT,
+                  updated_at INTEGER
+                );
                 """
             )
             self._ensure_item_columns(conn)
@@ -634,6 +653,64 @@ class AtlasStore(object):
                 (cache_key, json.dumps(payload), int(time.time())),
             )
 
+    def movie_metadata_get_many(self, movie_keys, ttl_seconds):
+        movie_keys = list(movie_keys)
+        if not movie_keys:
+            return {}
+        placeholders = ",".join("?" for _ in movie_keys)
+        min_updated = int(time.time()) - int(ttl_seconds)
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT movie_key, payload
+                FROM movie_metadata_cache
+                WHERE updated_at >= ? AND movie_key IN ({})
+                """.format(placeholders),
+                [min_updated] + movie_keys,
+            ).fetchall()
+        result = {}
+        for row in rows:
+            try:
+                result[row["movie_key"]] = json.loads(row["payload"])
+            except Exception:
+                pass
+        return result
+
+    def movie_metadata_set(self, movie_key, payload):
+        genres = payload.get("genres") or []
+        countries = payload.get("countries") or []
+        cast = payload.get("cast") or []
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO movie_metadata_cache (
+                  movie_key, tmdb_id, title, original_title, year, overview,
+                  genres, rating, runtime, countries, director, cast,
+                  poster, backdrop, language, payload, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    movie_key,
+                    payload.get("tmdb_id"),
+                    payload.get("title") or "",
+                    payload.get("original_title") or "",
+                    payload.get("year") or 0,
+                    payload.get("overview") or "",
+                    json.dumps(genres),
+                    payload.get("rating") or 0,
+                    payload.get("runtime") or 0,
+                    json.dumps(countries),
+                    payload.get("director") or "",
+                    json.dumps(cast),
+                    payload.get("poster") or "",
+                    payload.get("backdrop") or "",
+                    payload.get("language") or "",
+                    json.dumps(payload),
+                    int(time.time()),
+                ),
+            )
+
     def clear_metadata_cache(self):
         with self.connect() as conn:
             conn.execute("DELETE FROM metadata_cache")
+            conn.execute("DELETE FROM movie_metadata_cache")

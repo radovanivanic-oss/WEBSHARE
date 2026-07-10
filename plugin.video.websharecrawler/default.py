@@ -352,7 +352,7 @@ def tools_menu():
     add_directory("Katalóg", "catalog")
     add_command("Preindexovať katalóg", "reindex")
     add_command("Vymazať lokálny index", "clear_index")
-    add_command("Vymazať metadata cache", "clear_metadata_cache")
+    add_command("Vymazať cache metadát", "clear_metadata_cache")
     add_command("Vymazať resolver cache", "clear_resolver_cache")
     add_command("Vymazať históriu", "clear_history")
     add_command("Obnoviť skryté položky", "reset_hidden_home")
@@ -377,7 +377,7 @@ def catalog_menu():
     add_command("Zdroj: {}".format(source), "catalog_status")
     add_command("Preindexovať katalóg", "reindex")
     add_command("Vymazať index", "clear_index")
-    add_command("Vymazať metadata cache", "clear_metadata_cache")
+    add_command("Vymazať cache metadát", "clear_metadata_cache")
     add_command("Vymazať resolver cache", "clear_resolver_cache")
     add_command("Obnoviť skryté položky", "reset_hidden_home")
     xbmcplugin.endOfDirectory(HANDLE)
@@ -645,6 +645,11 @@ def movie_group_cache_key(row):
     return "movie:{}:{}".format(int(row["year"] or 0), row["group_title"].lower())
 
 
+def movie_item_cache_key(row):
+    title = row["catalog_title"] or row["title"] or row["name"] or row["ident"]
+    return "movie:{}:{}".format(int(row["year"] or 0), title.lower())
+
+
 def group_as_metadata_row(row):
     return {
         "ident": movie_group_cache_key(row),
@@ -660,7 +665,7 @@ def load_group_metadata(rows):
         return {}
 
     keys = [movie_group_cache_key(row) for row in rows]
-    cached = store().metadata_get_many(keys, metadata_ttl_seconds())
+    cached = store().movie_metadata_get_many(keys, metadata_ttl_seconds())
     result = dict(cached)
     missing = [row for row in rows if movie_group_cache_key(row) not in cached]
 
@@ -668,6 +673,7 @@ def load_group_metadata(rows):
         api_key=setting("tmdb_api_key"),
         language=setting("metadata_language", "sk-SK"),
         fallback_language=setting("metadata_fallback_language", "cs-CZ"),
+        second_fallback_language=setting("metadata_second_fallback_language", "en-US"),
     )
     if not client.enabled():
         return result
@@ -676,7 +682,8 @@ def load_group_metadata(rows):
         key = movie_group_cache_key(row)
         data = client.fetch_for_row(group_as_metadata_row(row))
         if data:
-            store().metadata_set(key, data)
+            data["movie_key"] = key
+            store().movie_metadata_set(key, data)
             result[key] = data
     return result
 
@@ -829,29 +836,50 @@ def load_page_metadata(rows):
     if not bool_setting("show_descriptions", True) and not bool_setting("show_posters", True):
         return {}
 
-    cache_keys = {}
+    movie_keys = {}
+    file_keys = {}
     for row in rows:
-        cache_keys[row["ident"]] = metadata_key(row)
-
-    cached = store().metadata_get_many(list(cache_keys.values()), metadata_ttl_seconds())
-    result = {}
-    missing = []
-    for row in rows:
-        key = cache_keys[row["ident"]]
-        if key in cached:
-            result[row["ident"]] = cached[key]
+        if row["media_type"] == "movie":
+            movie_keys[row["ident"]] = movie_item_cache_key(row)
         else:
-            missing.append((row, key))
+            file_keys[row["ident"]] = metadata_key(row)
+
+    result = {}
+    movie_cached = store().movie_metadata_get_many(list(movie_keys.values()), metadata_ttl_seconds())
+    file_cached = store().metadata_get_many(list(file_keys.values()), metadata_ttl_seconds())
+    missing_movies = []
+    missing_files = []
+    for row in rows:
+        if row["media_type"] == "movie":
+            key = movie_keys[row["ident"]]
+            if key in movie_cached:
+                result[row["ident"]] = movie_cached[key]
+            else:
+                missing_movies.append((row, key))
+        else:
+            key = file_keys[row["ident"]]
+            if key in file_cached:
+                result[row["ident"]] = file_cached[key]
+            else:
+                missing_files.append((row, key))
 
     client = TMDbClient(
         api_key=setting("tmdb_api_key"),
         language=setting("metadata_language", "sk-SK"),
         fallback_language=setting("metadata_fallback_language", "cs-CZ"),
+        second_fallback_language=setting("metadata_second_fallback_language", "en-US"),
     )
     if not client.enabled():
         return result
 
-    for row, key in missing:
+    for row, key in missing_movies:
+        data = client.fetch_for_row(row)
+        if data:
+            data["movie_key"] = key
+            store().movie_metadata_set(key, data)
+            result[row["ident"]] = data
+
+    for row, key in missing_files:
         data = client.fetch_for_row(row)
         if data:
             store().metadata_set(key, data)
@@ -948,7 +976,10 @@ def decorate_label(row):
 
 
 def build_video_info(row, meta, title):
+    is_movie = row["media_type"] == "movie"
     plot = meta.get("overview") or technical_plot(row)
+    if is_movie and not plot:
+        plot = "Popis filmu nie je dostupný."
     genres = meta.get("genres") or []
     countries = meta.get("countries") or []
     runtime = int(meta.get("runtime") or 0)
@@ -976,8 +1007,7 @@ def build_art(meta):
         art["poster"] = meta.get("poster") or fallback
         art["thumb"] = meta.get("poster") or fallback
         art["icon"] = meta.get("poster") or fallback
-    if meta.get("backdrop"):
-        art["fanart"] = meta["backdrop"]
+    art["fanart"] = meta.get("backdrop") or fallback
     return art
 
 

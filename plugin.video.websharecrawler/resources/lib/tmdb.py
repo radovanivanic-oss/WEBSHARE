@@ -12,7 +12,7 @@ from resources.lib.metadata import YEAR_RE, normalize_title
 
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMAGE = "https://image.tmdb.org/t/p/"
-USER_AGENT = "AG Kino Kodi Addon/0.6.2"
+USER_AGENT = "AG Kino Kodi Addon/0.6.3"
 
 
 def clean_query(title):
@@ -37,10 +37,17 @@ def metadata_key(row):
 
 
 class TMDbClient(object):
-    def __init__(self, api_key, language="sk-SK", fallback_language="cs-CZ"):
+    def __init__(
+        self,
+        api_key,
+        language="sk-SK",
+        fallback_language="cs-CZ",
+        second_fallback_language="en-US",
+    ):
         self.api_key = api_key or ""
         self.language = language or "sk-SK"
         self.fallback_language = fallback_language or "cs-CZ"
+        self.second_fallback_language = second_fallback_language or "en-US"
 
     def enabled(self):
         return bool(self.api_key.strip())
@@ -54,21 +61,27 @@ class TMDbClient(object):
             return None
 
         year = row["year"] or None
-        movie = self._search_movie(query, year, self.language)
-        if not movie and self.fallback_language and self.fallback_language != self.language:
-            movie = self._search_movie(query, year, self.fallback_language)
+        languages = self.languages()
+        movie = None
+        for language in languages:
+            movie = self._search_movie(query, year, language)
+            if movie:
+                break
         if not movie:
             return None
 
-        details = self._movie_details(movie["id"], self.language)
-        fallback_details = None
-        if self.fallback_language and self.fallback_language != self.language:
-            fallback_details = self._movie_details(movie["id"], self.fallback_language)
-        if not details:
-            details = fallback_details
-        if not details:
+        detail_rows = []
+        for language in languages:
+            details = self._movie_details(movie["id"], language)
+            if details:
+                details["_language"] = language
+                detail_rows.append(details)
+
+        if not detail_rows:
             return None
-        if fallback_details:
+
+        details = detail_rows[0]
+        for fallback_details in detail_rows[1:]:
             details = _merge_details(details, fallback_details)
 
         credits = details.get("credits") or {}
@@ -98,7 +111,19 @@ class TMDbClient(object):
             "cast": cast,
             "poster": _image(details.get("poster_path"), "w500"),
             "backdrop": _image(details.get("backdrop_path"), "w1280"),
+            "language": details.get("_overview_language") or details.get("_language") or languages[0],
         }
+
+    def languages(self):
+        result = []
+        for language in (
+            self.language,
+            self.fallback_language,
+            self.second_fallback_language,
+        ):
+            if language and language not in result:
+                result.append(language)
+        return result or ["sk-SK", "cs-CZ", "en-US"]
 
     def _get(self, path, params):
         query = dict(params or {})
@@ -142,8 +167,11 @@ def _image(path, size):
 def _merge_details(primary, fallback):
     merged = dict(primary or {})
     fallback = fallback or {}
+    if not merged.get("overview") and fallback.get("overview"):
+        merged["overview"] = fallback["overview"]
+        merged["_overview_language"] = fallback.get("_language")
+
     for key in (
-        "overview",
         "poster_path",
         "backdrop_path",
         "runtime",
