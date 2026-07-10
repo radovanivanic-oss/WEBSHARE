@@ -129,6 +129,21 @@ def update_account_status(force=False):
     set_setting("account_last_check", str(now))
 
 
+def update_catalog_info(store):
+    try:
+        state = store.catalog_state()
+    except Exception:
+        set_setting("catalog_status_info", "Index zatiaľ nie je dostupný")
+        return
+
+    total = state.get("item_count") or 0
+    updated = state.get("indexed_at") or "-"
+    set_setting("addon_version_info", ADDON.getAddonInfo("version"))
+    set_setting("catalog_status_info", "Lokálny SQLite index")
+    set_setting("catalog_items_info", str(total))
+    set_setting("catalog_updated_info", str(updated))
+
+
 def run():
     monitor = AtlasMonitor()
     player = xbmc.Player()
@@ -136,10 +151,13 @@ def run():
     last_ident = None
     ticks = 0
     update_account_status()
+    update_catalog_info(store)
 
     while not monitor.abortRequested():
         if ticks % 6 == 0:
             update_account_status()
+        if ticks % 12 == 0:
+            update_catalog_info(store)
 
         if player.isPlayingVideo():
             data = read_now_playing()

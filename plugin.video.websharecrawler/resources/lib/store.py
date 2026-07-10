@@ -89,6 +89,11 @@ class AtlasStore(object):
                   item_key TEXT PRIMARY KEY,
                   created_at INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS metadata_cache (
+                  cache_key TEXT PRIMARY KEY,
+                  payload TEXT,
+                  updated_at INTEGER
+                );
                 """
             )
             self._ensure_item_columns(conn)
@@ -511,3 +516,40 @@ class AtlasStore(object):
                 (limit,),
             ).fetchall()
         return rows
+
+    def metadata_get_many(self, cache_keys, ttl_seconds):
+        cache_keys = list(cache_keys)
+        if not cache_keys:
+            return {}
+        placeholders = ",".join("?" for _ in cache_keys)
+        min_updated = int(time.time()) - int(ttl_seconds)
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT cache_key, payload
+                FROM metadata_cache
+                WHERE updated_at >= ? AND cache_key IN ({})
+                """.format(placeholders),
+                [min_updated] + list(cache_keys),
+            ).fetchall()
+        result = {}
+        for row in rows:
+            try:
+                result[row["cache_key"]] = json.loads(row["payload"])
+            except Exception:
+                pass
+        return result
+
+    def metadata_set(self, cache_key, payload):
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO metadata_cache(cache_key, payload, updated_at)
+                VALUES(?, ?, ?)
+                """,
+                (cache_key, json.dumps(payload), int(time.time())),
+            )
+
+    def clear_metadata_cache(self):
+        with self.connect() as conn:
+            conn.execute("DELETE FROM metadata_cache")

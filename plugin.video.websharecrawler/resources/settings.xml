@@ -3,6 +3,10 @@
   <category label="Účty">
     <setting id="username" type="text" label="Používateľské meno Webshare" default=""/>
     <setting id="password" type="text" label="Heslo Webshare" option="hidden" default=""/>
+    <setting id="tmdb_api_key" type="text" label="TMDb API key" option="hidden" default=""/>
+    <setting id="metadata_language" type="labelenum" label="Jazyk metadát" values="sk-SK|cs-CZ|en-US" default="0"/>
+    <setting id="metadata_fallback_language" type="labelenum" label="Záložný jazyk metadát" values="cs-CZ|en-US|sk-SK" default="0"/>
+    <setting id="metadata_cache_ttl_days" type="number" label="Platnosť metadata cache v dňoch" default="30"/>
     <setting id="account_status" type="text" label="Stav prihlásenia" default="Neoverené" enable="false"/>
     <setting id="vip_remaining" type="text" label="Počet zostávajúcich dní predplatného" default="-" enable="false"/>
     <setting id="wst_status" type="text" label="Token Webshare" default="-" enable="false"/>
@@ -13,10 +17,8 @@
   <category label="Streamy">
     <setting id="catalog_url" type="text" label="Primárny katalóg (.json.gz)" default="http://192.168.2.226/videos_all.json.gz"/>
     <setting id="fallback_catalog_url" type="text" label="Záložný katalóg (.json)" default="http://192.168.2.226/videos_all.json"/>
-    <setting id="show_old_menu" type="bool" label="Zobraziť jednoduché menu" default="false"/>
     <setting id="stream_autoselect" type="bool" label="Automatický výber streamu" default="true"/>
     <setting id="cache_ttl_hours" type="number" label="Platnosť stream cache v hodinách" default="6"/>
-    <setting id="page_size" type="number" label="Počet položiek na stránku" default="50"/>
     <setting id="prefer_language" type="labelenum" label="Primárny jazyk" values="Bez preferencie|CZ|SK|CZ/SK|EN|Multi" default="0"/>
     <setting id="secondary_language" type="labelenum" label="Sekundárny jazyk" values="Bez preferencie|CZ|SK|CZ/SK|EN|Multi" default="0"/>
     <setting id="prefer_quality" type="labelenum" label="Maximálna / preferovaná kvalita" values="Bez preferencie|2160p|1080p|720p|SD" default="0"/>
@@ -43,8 +45,24 @@
     <setting id="auto_index" type="bool" label="Automaticky indexovať pri prvom spustení" default="true"/>
     <setting type="action" label="Preindexovať katalóg" action="RunPlugin(plugin://plugin.video.websharecrawler?action=reindex)"/>
     <setting type="action" label="Vymazať lokálny index" action="RunPlugin(plugin://plugin.video.websharecrawler?action=clear_index)"/>
+    <setting type="action" label="Vymazať metadata cache" action="RunPlugin(plugin://plugin.video.websharecrawler?action=clear_metadata_cache)"/>
     <setting type="action" label="Vymazať resolver cache" action="RunPlugin(plugin://plugin.video.websharecrawler?action=clear_resolver_cache)"/>
     <setting type="action" label="Vymazať históriu" action="RunPlugin(plugin://plugin.video.websharecrawler?action=clear_history)"/>
     <setting type="action" label="Obnoviť skryté položky" action="RunPlugin(plugin://plugin.video.websharecrawler?action=reset_hidden_home)"/>
+  </category>
+
+  <category label="Rozhranie">
+    <setting id="page_size" type="number" label="Počet položiek na stránku" default="50"/>
+    <setting id="view_type" type="labelenum" label="Typ zobrazenia" values="Predvolené|Zoznam|InfoWall|Poster" default="0"/>
+    <setting id="show_technical_info" type="bool" label="Zobrazovať technické info" default="true"/>
+    <setting id="show_posters" type="bool" label="Zobrazovať poster" default="true"/>
+    <setting id="show_descriptions" type="bool" label="Zobrazovať popis" default="true"/>
+  </category>
+
+  <category label="Informácie">
+    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.6.0" enable="false"/>
+    <setting id="catalog_status_info" type="text" label="Stav katalógu" default="Lokálny SQLite index" enable="false"/>
+    <setting id="catalog_items_info" type="text" label="Počet indexovaných položiek" default="Pozri Nástroje / Katalóg" enable="false"/>
+    <setting id="catalog_updated_info" type="text" label="Posledná aktualizácia" default="Pozri Nástroje / Katalóg" enable="false"/>
   </category>
 </settings>

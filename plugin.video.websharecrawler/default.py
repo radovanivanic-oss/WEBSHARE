@@ -4,6 +4,7 @@ from __future__ import absolute_import, division, unicode_literals
 
 import sys
 import json
+import os
 from urllib.parse import parse_qsl, urlencode
 
 import xbmc
@@ -13,6 +14,7 @@ import xbmcplugin
 
 from resources.lib.indexer import CatalogIndexer
 from resources.lib.store import AtlasStore
+from resources.lib.tmdb import TMDbClient, metadata_key
 from resources.lib.webshare import ResolverError, WebshareResolver
 
 
@@ -62,6 +64,14 @@ def indexer():
 
 def page_size():
     return max(10, int_setting("page_size", PAGE_SIZE))
+
+
+def metadata_ttl_seconds():
+    return max(1, int_setting("metadata_cache_ttl_days", 30)) * 86400
+
+
+def fallback_art():
+    return os.path.join(ADDON.getAddonInfo("path"), "icon.png")
 
 
 def ensure_index():
@@ -342,6 +352,7 @@ def tools_menu():
     add_directory("Katalóg", "catalog")
     add_command("Preindexovať katalóg", "reindex")
     add_command("Vymazať lokálny index", "clear_index")
+    add_command("Vymazať metadata cache", "clear_metadata_cache")
     add_command("Vymazať resolver cache", "clear_resolver_cache")
     add_command("Vymazať históriu", "clear_history")
     add_command("Obnoviť skryté položky", "reset_hidden_home")
@@ -366,6 +377,7 @@ def catalog_menu():
     add_command("Zdroj: {}".format(source), "catalog_status")
     add_command("Preindexovať katalóg", "reindex")
     add_command("Vymazať index", "clear_index")
+    add_command("Vymazať metadata cache", "clear_metadata_cache")
     add_command("Vymazať resolver cache", "clear_resolver_cache")
     add_command("Obnoviť skryté položky", "reset_hidden_home")
     xbmcplugin.endOfDirectory(HANDLE)
@@ -612,9 +624,13 @@ def list_items(params):
     limit = page_size()
     offset = page * limit
     rows, has_more = store().query_items(params, limit=limit, offset=offset)
+    metadata = load_page_metadata(rows)
+
+    if page == 0:
+        add_directory("Pokročilý filter", "advanced_filter")
 
     for row in rows:
-        add_playable(row)
+        add_playable(row, metadata.get(row["ident"]))
 
     add_next_page(has_more, "list", params, page)
     xbmcplugin.setContent(HANDLE, "videos")
@@ -629,19 +645,55 @@ def add_next_page(has_more, action, params, page):
     add_directory("Ďalšia strana", action, next_params)
 
 
-def add_playable(row):
+def load_page_metadata(rows):
+    if not bool_setting("show_descriptions", True) and not bool_setting("show_posters", True):
+        return {}
+
+    cache_keys = {}
+    for row in rows:
+        cache_keys[row["ident"]] = metadata_key(row)
+
+    cached = store().metadata_get_many(list(cache_keys.values()), metadata_ttl_seconds())
+    result = {}
+    missing = []
+    for row in rows:
+        key = cache_keys[row["ident"]]
+        if key in cached:
+            result[row["ident"]] = cached[key]
+        else:
+            missing.append((row, key))
+
+    client = TMDbClient(
+        api_key=setting("tmdb_api_key"),
+        language=setting("metadata_language", "sk-SK"),
+        fallback_language=setting("metadata_fallback_language", "cs-CZ"),
+    )
+    if not client.enabled():
+        return result
+
+    for row, key in missing:
+        data = client.fetch_for_row(row)
+        if data:
+            store().metadata_set(key, data)
+            result[row["ident"]] = data
+    return result
+
+
+def add_playable(row, meta=None):
+    meta = meta or {}
     title = row["title"] or row["name"] or row["ident"]
+    display_title = meta.get("title") or title
     label = decorate_label(row)
     item = xbmcgui.ListItem(label=label)
     item.setProperty("IsPlayable", "true")
-    item.setInfo(
-        "video",
-        {
-            "title": title,
-            "year": int(row["year"] or 0),
-            "plot": row["source"] or "",
-        },
-    )
+    info = build_video_info(row, meta, display_title)
+    item.setInfo("video", info)
+    item.setArt(build_art(meta))
+    item.setProperty("VideoCodec", codec_from_name(row["name"]))
+    item.setProperty("VideoResolution", resolution_from_quality(row["quality"]))
+    item.setProperty("AudioLanguage", row["language"] or "")
+    item.setProperty("AudioChannels", audio_channels_from_name(row["name"]))
+    item.setProperty("AspectRatio", aspect_ratio_from_name(row["name"]))
 
     ident = row["ident"]
     context = [
@@ -700,6 +752,97 @@ def decorate_label(row):
     if meta:
         parts.append("[{}]".format(" | ".join(meta)))
     return " ".join(parts)
+
+
+def build_video_info(row, meta, title):
+    plot = meta.get("overview") or technical_plot(row)
+    genres = meta.get("genres") or []
+    countries = meta.get("countries") or []
+    runtime = int(meta.get("runtime") or 0)
+    info = {
+        "title": title,
+        "originaltitle": meta.get("original_title") or row["name"] or title,
+        "year": int(meta.get("year") or row["year"] or 0),
+        "plot": plot if bool_setting("show_descriptions", True) else "",
+        "genre": " / ".join(genres) if genres else (row["genre"] if row["genre"] != "unknown" else ""),
+        "rating": float(meta.get("rating") or 0),
+        "duration": runtime * 60 if runtime else 0,
+        "country": " / ".join(countries),
+        "director": meta.get("director") or "",
+        "cast": meta.get("cast") or [],
+        "mediatype": "episode" if row["media_type"] == "episode" else "movie",
+    }
+    return info
+
+
+def build_art(meta):
+    art = {}
+    fallback = fallback_art()
+    if bool_setting("show_posters", True):
+        art["poster"] = meta.get("poster") or fallback
+        art["thumb"] = meta.get("poster") or fallback
+        art["icon"] = meta.get("poster") or fallback
+    if meta.get("backdrop"):
+        art["fanart"] = meta["backdrop"]
+    return art
+
+
+def technical_plot(row):
+    if not bool_setting("show_technical_info", True):
+        return ""
+
+    values = []
+    if row["quality"] and row["quality"] != "unknown":
+        values.append("Kvalita: {}".format(row["quality"]))
+    if row["language"] and row["language"] != "unknown":
+        values.append("Jazyk: {}".format(row["language"]))
+    if row["audio_type"] and row["audio_type"] != "unknown":
+        values.append("Audio: {}".format(row["audio_type"]))
+    if row["subtitle_type"] and row["subtitle_type"] != "unknown":
+        values.append("Titulky: {}".format(row["subtitle_type"]))
+    if row["size"]:
+        values.append("Veľkosť: {:.2f} GB".format(float(row["size"]) / (1024 ** 3)))
+    return "\n".join(values)
+
+
+def codec_from_name(name):
+    text = (name or "").lower()
+    if "x265" in text or "h265" in text or "hevc" in text:
+        return "hevc"
+    if "x264" in text or "h264" in text or "avc" in text:
+        return "h264"
+    if "xvid" in text:
+        return "xvid"
+    return ""
+
+
+def resolution_from_quality(quality):
+    return {
+        "2160p": "2160",
+        "1080p": "1080",
+        "720p": "720",
+        "SD": "576",
+    }.get(quality or "", "")
+
+
+def audio_channels_from_name(name):
+    text = (name or "").lower()
+    if "7.1" in text:
+        return "8"
+    if "5.1" in text:
+        return "6"
+    if "2.0" in text:
+        return "2"
+    return ""
+
+
+def aspect_ratio_from_name(name):
+    text = (name or "").lower()
+    if "1920x800" in text or "1920x804" in text or "1920x816" in text:
+        return "2.39"
+    if "1920x1080" in text or "1280x720" in text:
+        return "1.78"
+    return ""
 
 
 def quality_label(quality):
@@ -814,6 +957,11 @@ def clear_resolver_cache():
     notify("Resolver cache vymazaná")
 
 
+def clear_metadata_cache():
+    store().clear_metadata_cache()
+    notify("Metadata cache vymazaná")
+
+
 def clear_index():
     store().clear_index()
     notify("Index vymazaný")
@@ -902,6 +1050,7 @@ def router():
         "hide_home": lambda: hide_home(params),
         "reset_hidden_home": reset_hidden_home,
         "clear_resolver_cache": clear_resolver_cache,
+        "clear_metadata_cache": clear_metadata_cache,
         "settings": open_settings,
         "catalog_status": catalog_menu,
     }
