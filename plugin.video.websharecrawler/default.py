@@ -70,6 +70,28 @@ def metadata_ttl_seconds():
     return max(1, int_setting("metadata_cache_ttl_days", 30)) * 86400
 
 
+def enum_setting(key, values, default):
+    value = setting(key, default)
+    if value in values:
+        return value
+    try:
+        return values[int(value)]
+    except Exception:
+        return default
+
+
+def metadata_language():
+    return enum_setting("metadata_language", ["sk-SK", "cs-CZ", "en-US"], "sk-SK")
+
+
+def metadata_fallback_language():
+    return enum_setting("metadata_fallback_language", ["cs-CZ", "en-US", "sk-SK"], "cs-CZ")
+
+
+def metadata_second_fallback_language():
+    return enum_setting("metadata_second_fallback_language", ["en-US", "cs-CZ", "sk-SK"], "en-US")
+
+
 def fallback_art():
     return os.path.join(ADDON.getAddonInfo("path"), "icon.png")
 
@@ -671,9 +693,9 @@ def load_group_metadata(rows):
 
     client = TMDbClient(
         api_key=setting("tmdb_api_key"),
-        language=setting("metadata_language", "sk-SK"),
-        fallback_language=setting("metadata_fallback_language", "cs-CZ"),
-        second_fallback_language=setting("metadata_second_fallback_language", "en-US"),
+        language=metadata_language(),
+        fallback_language=metadata_fallback_language(),
+        second_fallback_language=metadata_second_fallback_language(),
     )
     if not client.enabled():
         return result
@@ -865,9 +887,9 @@ def load_page_metadata(rows):
 
     client = TMDbClient(
         api_key=setting("tmdb_api_key"),
-        language=setting("metadata_language", "sk-SK"),
-        fallback_language=setting("metadata_fallback_language", "cs-CZ"),
-        second_fallback_language=setting("metadata_second_fallback_language", "en-US"),
+        language=metadata_language(),
+        fallback_language=metadata_fallback_language(),
+        second_fallback_language=metadata_second_fallback_language(),
     )
     if not client.enabled():
         return result
@@ -977,9 +999,10 @@ def decorate_label(row):
 
 def build_video_info(row, meta, title):
     is_movie = row["media_type"] == "movie"
-    plot = meta.get("overview") or technical_plot(row)
-    if is_movie and not plot:
-        plot = "Popis filmu nie je dostupný."
+    if is_movie:
+        plot = meta.get("overview") or "Popis filmu nie je dostupný."
+    else:
+        plot = meta.get("overview") or technical_plot(row)
     genres = meta.get("genres") or []
     countries = meta.get("countries") or []
     runtime = int(meta.get("runtime") or 0)
