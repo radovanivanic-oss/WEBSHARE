@@ -180,7 +180,7 @@ def add_saved_filters_to_home(hidden):
         except Exception:
             continue
         label = "[COLOR yellow]{}[/COLOR]".format(row["name"])
-        add_directory(label, "list", payload)
+        add_directory(label, listing_action(payload), payload)
 
 
 def add_pins_to_home():
@@ -223,16 +223,16 @@ def quick_menu():
 
 
 def movies_menu():
-    add_directory("Všetky filmy", "list", {"media_type": "movie", "preset": "recent"})
-    add_directory("Novinky", "list", {"media_type": "movie", "preset": "recent"})
+    add_directory("Všetky filmy", "movie_groups", {"preset": "recent"})
+    add_directory("Novinky", "movie_groups", {"preset": "recent"})
     add_directory("Roky", "years", {"media_type": "movie"})
     add_directory("Žánre", "genres", {"media_type": "movie"})
     add_directory("Kvalita", "quality", {"media_type": "movie"})
     add_directory("Dabing / titulky", "audio_subtitles", {"media_type": "movie"})
-    add_directory("4K / UHD filmy", "list", {"media_type": "movie", "quality": "2160p"})
-    add_directory("1080p filmy", "list", {"media_type": "movie", "quality": "1080p"})
-    add_directory("CZ / SK filmy", "list", {"media_type": "movie", "language": "CZ/SK"})
-    add_directory("Náhodný film", "list", {"media_type": "movie", "preset": "random"})
+    add_directory("4K / UHD filmy", "movie_groups", {"quality": "2160p"})
+    add_directory("1080p filmy", "movie_groups", {"quality": "1080p"})
+    add_directory("CZ / SK filmy", "movie_groups", {"language": "CZ/SK"})
+    add_directory("Náhodný film", "movie_groups", {"preset": "random"})
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -251,7 +251,7 @@ def series_menu():
 
 
 def news_menu():
-    add_directory("Nové filmy", "list", {"media_type": "movie", "preset": "recent"})
+    add_directory("Nové filmy", "movie_groups", {"preset": "recent"})
     add_directory("Nové epizódy", "list", {"media_type": "episode", "preset": "recent"})
     add_directory("Nové 4K / UHD", "list", {"quality": "2160p", "preset": "recent"})
     add_directory("Nové CZ/SK", "list", {"language": "CZ/SK", "preset": "recent"})
@@ -260,7 +260,7 @@ def news_menu():
 
 def latest_menu():
     add_directory("Všetko", "list", {"preset": "recent"})
-    add_directory("Filmy", "list", {"media_type": "movie", "preset": "recent"})
+    add_directory("Filmy", "movie_groups", {"preset": "recent"})
     add_directory("Seriály", "list", {"media_type": "episode", "preset": "recent"})
     add_directory("1080p", "list", {"quality": "1080p", "preset": "recent"})
     add_directory("4K / UHD", "list", {"quality": "2160p", "preset": "recent"})
@@ -290,7 +290,7 @@ def genres_menu():
     ):
         query = dict(base)
         query["genre"] = genre
-        add_directory(label, "list", query)
+        add_directory(label, listing_action(query), query)
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -299,7 +299,7 @@ def quality_menu(params=None):
     for quality in ("2160p", "1080p", "720p", "SD", "unknown"):
         query = dict(params)
         query["quality"] = quality
-        add_directory(quality_label(quality), "list", query)
+        add_directory(quality_label(quality), listing_action(query), query)
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -315,7 +315,7 @@ def years_menu(params=None):
     ):
         query = dict(params)
         query.update({"year_from": start, "year_to": end})
-        add_directory(label, "list", query)
+        add_directory(label, listing_action(query), query)
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -344,7 +344,7 @@ def audio_subtitles_menu(params=None):
     ):
         query = dict(base)
         query.update(payload)
-        add_directory(label, "list", query)
+        add_directory(label, listing_action(query), query)
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -393,7 +393,10 @@ def search(params=None):
     list_params = {"q": query}
     if params.get("media_type"):
         list_params["media_type"] = params["media_type"]
-    list_items(list_params)
+    if list_params.get("media_type") == "movie":
+        movie_groups(list_params)
+    else:
+        list_items(list_params)
 
 
 def search_ident():
@@ -515,7 +518,10 @@ def advanced_filter():
         if name:
             store().save_filter(name, params)
 
-    list_items(params)
+    if params.get("media_type") == "movie":
+        movie_groups(params)
+    else:
+        list_items(params)
 
 
 def apply_year_filter(params, value):
@@ -574,6 +580,7 @@ def saved_filters_menu():
             ]
         )
         payload["action"] = "list"
+        payload["action"] = listing_action(payload)
         xbmcplugin.addDirectoryItem(HANDLE, addon_url(payload), item, isFolder=True)
     xbmcplugin.endOfDirectory(HANDLE)
 
@@ -581,6 +588,178 @@ def saved_filters_menu():
 def filter_delete(params):
     store().delete_filter(params.get("name", ""))
     notify("Filter vymazaný")
+
+
+def listing_action(query):
+    return "movie_groups" if query.get("media_type") == "movie" else "list"
+
+
+def movie_groups(params):
+    ensure_index()
+    page = int(params.get("page", "0"))
+    limit = page_size()
+    offset = page * limit
+    rows, has_more = store().movie_groups(params, limit=limit, offset=offset)
+    metadata = load_group_metadata(rows)
+
+    if page == 0:
+        add_directory("Pokročilý filter", "advanced_filter")
+
+    for row in rows:
+        add_movie_group(row, metadata.get(movie_group_cache_key(row)))
+
+    add_next_page(has_more, "movie_groups", params, page)
+    xbmcplugin.setContent(HANDLE, "movies")
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def movie_detail(params):
+    title = params.get("catalog_title", "")
+    year = int(params.get("year") or 0)
+    rows = store().movie_group_items(title, year, limit=200)
+    metadata = load_page_metadata(rows)
+
+    if rows:
+        best = rows[0]
+        item = xbmcgui.ListItem(label="[B]Prehrať najlepší stream[/B]")
+        item.setProperty("IsPlayable", "true")
+        item.setInfo("video", build_video_info(best, metadata.get(best["ident"]) or {}, title))
+        item.setArt(build_art(metadata.get(best["ident"]) or {}))
+        xbmcplugin.addDirectoryItem(
+            HANDLE,
+            addon_url({"action": "play", "ident": best["ident"]}),
+            item,
+            isFolder=False,
+        )
+
+    for row in rows:
+        add_playable(row, metadata.get(row["ident"]))
+
+    xbmcplugin.setContent(HANDLE, "videos")
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def movie_group_cache_key(row):
+    return "movie:{}:{}".format(int(row["year"] or 0), row["group_title"].lower())
+
+
+def group_as_metadata_row(row):
+    return {
+        "ident": movie_group_cache_key(row),
+        "media_type": "movie",
+        "title": row["group_title"],
+        "name": row["group_title"],
+        "year": row["year"],
+    }
+
+
+def load_group_metadata(rows):
+    if not bool_setting("show_descriptions", True) and not bool_setting("show_posters", True):
+        return {}
+
+    keys = [movie_group_cache_key(row) for row in rows]
+    cached = store().metadata_get_many(keys, metadata_ttl_seconds())
+    result = dict(cached)
+    missing = [row for row in rows if movie_group_cache_key(row) not in cached]
+
+    client = TMDbClient(
+        api_key=setting("tmdb_api_key"),
+        language=setting("metadata_language", "sk-SK"),
+        fallback_language=setting("metadata_fallback_language", "cs-CZ"),
+    )
+    if not client.enabled():
+        return result
+
+    for row in missing:
+        key = movie_group_cache_key(row)
+        data = client.fetch_for_row(group_as_metadata_row(row))
+        if data:
+            store().metadata_set(key, data)
+            result[key] = data
+    return result
+
+
+def add_movie_group(row, meta=None):
+    meta = meta or {}
+    title = meta.get("title") or row["group_title"]
+    label = movie_group_label(row, title)
+    item = xbmcgui.ListItem(label=label)
+    info_row = {
+        "title": row["group_title"],
+        "name": row["group_title"],
+        "year": row["year"],
+        "genre": "unknown",
+        "media_type": "movie",
+        "quality": "",
+        "language": "",
+        "audio_type": "",
+        "subtitle_type": "",
+        "size": row["max_size"] or 0,
+    }
+    item.setInfo("video", build_video_info(info_row, meta, title))
+    item.setArt(build_art(meta))
+    item.setProperty("stream_count", str(row["stream_count"]))
+    item.addContextMenuItems(
+        [
+            (
+                "Pripnúť na hlavnú stránku",
+                "RunPlugin({})".format(
+                    addon_url(
+                        {
+                            "action": "pin_add",
+                            "kind": "menu",
+                            "item_key": movie_group_cache_key(row),
+                            "label": title,
+                            "payload": json.dumps(
+                                {
+                                    "action": "movie_detail",
+                                    "catalog_title": row["group_title"],
+                                    "year": int(row["year"] or 0),
+                                }
+                            ),
+                        }
+                    )
+                ),
+            )
+        ]
+    )
+    xbmcplugin.addDirectoryItem(
+        HANDLE,
+        addon_url(
+            {
+                "action": "movie_detail",
+                "catalog_title": row["group_title"],
+                "year": int(row["year"] or 0),
+            }
+        ),
+        item,
+        isFolder=True,
+    )
+
+
+def movie_group_label(row, title):
+    meta = []
+    if row["year"]:
+        meta.append(str(row["year"]))
+    qualities = compact_csv(row["qualities"], skip=("unknown", ""))
+    languages = compact_csv(row["languages"], skip=("unknown", ""))
+    if qualities:
+        meta.append(qualities)
+    if languages:
+        meta.append(languages)
+    meta.append("{} streamov".format(row["stream_count"]))
+    return "{} [{}]".format(title, " | ".join(meta))
+
+
+def compact_csv(value, skip=()):
+    if not value:
+        return ""
+    out = []
+    for part in str(value).split(","):
+        part = part.strip()
+        if part and part not in skip and part not in out:
+            out.append(part)
+    return "/".join(out[:4])
 
 
 def series_titles(params):
@@ -1030,6 +1209,8 @@ def router():
         "advanced_filter": advanced_filter,
         "saved_filters": saved_filters_menu,
         "filter_delete": lambda: filter_delete(params),
+        "movie_groups": lambda: movie_groups(params),
+        "movie_detail": lambda: movie_detail(params),
         "series_titles": lambda: series_titles(params),
         "series_detail": lambda: series_detail(params),
         "list": lambda: list_items(params),

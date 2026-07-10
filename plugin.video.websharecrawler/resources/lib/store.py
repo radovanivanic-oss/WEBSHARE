@@ -33,6 +33,7 @@ class AtlasStore(object):
                 CREATE TABLE IF NOT EXISTS items (
                   ident TEXT PRIMARY KEY,
                   title TEXT,
+                  catalog_title TEXT,
                   name TEXT,
                   size INTEGER,
                   extension TEXT,
@@ -119,6 +120,7 @@ class AtlasStore(object):
             "audio_type": "ALTER TABLE items ADD COLUMN audio_type TEXT DEFAULT 'unknown'",
             "subtitle_type": "ALTER TABLE items ADD COLUMN subtitle_type TEXT DEFAULT 'unknown'",
             "genre": "ALTER TABLE items ADD COLUMN genre TEXT DEFAULT 'unknown'",
+            "catalog_title": "ALTER TABLE items ADD COLUMN catalog_title TEXT DEFAULT ''",
         }
         for column, sql in migrations.items():
             if column not in columns:
@@ -130,12 +132,12 @@ class AtlasStore(object):
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO items (
-                  ident, title, name, size, extension, mime, media_type, year,
+                  ident, title, catalog_title, name, size, extension, mime, media_type, year,
                   quality, language, audio_type, subtitle_type, genre,
                   series_title, season, episode, source, url,
                   added_order, search_text
                 ) VALUES (
-                  :ident, :title, :name, :size, :extension, :mime, :media_type, :year,
+                  :ident, :title, :catalog_title, :name, :size, :extension, :mime, :media_type, :year,
                   :quality, :language, :audio_type, :subtitle_type, :genre,
                   :series_title, :season, :episode, :source, :url,
                   :added_order, :search_text
@@ -186,11 +188,9 @@ class AtlasStore(object):
         with self.connect() as conn:
             return conn.execute("SELECT * FROM items WHERE ident = ?", (ident,)).fetchone()
 
-    def query_items(self, params, limit=50, offset=0):
+    def _item_where(self, params):
         where = []
         values = []
-        order = "added_order ASC"
-        preset = params.get("preset")
 
         if params.get("q"):
             words = [word.lower() for word in params["q"].split() if word.strip()]
@@ -213,6 +213,10 @@ class AtlasStore(object):
                 where.append("{} = ?".format(key))
                 values.append(params[key])
 
+        if params.get("catalog_title"):
+            where.append("catalog_title = ?")
+            values.append(params["catalog_title"])
+
         if params.get("season"):
             where.append("season = ?")
             values.append(int(params["season"]))
@@ -226,6 +230,10 @@ class AtlasStore(object):
                 where.append("year BETWEEN ? AND ?")
                 values.extend([start, end])
 
+        if params.get("year"):
+            where.append("year = ?")
+            values.append(int(params["year"]))
+
         if params.get("size_min"):
             where.append("size >= ?")
             values.append(int(params["size_min"]))
@@ -233,6 +241,13 @@ class AtlasStore(object):
         if params.get("size_max"):
             where.append("size <= ?")
             values.append(int(params["size_max"]))
+
+        return where, values
+
+    def query_items(self, params, limit=50, offset=0):
+        where, values = self._item_where(params)
+        order = "added_order ASC"
+        preset = params.get("preset")
 
         if preset == "large":
             order = "size DESC"
@@ -256,6 +271,75 @@ class AtlasStore(object):
         with self.connect() as conn:
             rows = conn.execute(sql, values).fetchall()
         return rows[:limit], len(rows) > limit
+
+    def movie_groups(self, params, limit=50, offset=0):
+        group_params = dict(params)
+        group_params["media_type"] = "movie"
+        where, values = self._item_where(group_params)
+        where.append("COALESCE(NULLIF(catalog_title, ''), title, name) != ''")
+
+        order = "latest_order ASC"
+        preset = params.get("preset")
+        if preset == "title":
+            order = "group_title COLLATE NOCASE ASC"
+        elif preset == "random":
+            order = "RANDOM()"
+        elif preset == "year":
+            order = "year DESC, group_title COLLATE NOCASE ASC"
+
+        sql = """
+            SELECT
+              COALESCE(NULLIF(catalog_title, ''), title, name) AS group_title,
+              COALESCE(year, 0) AS year,
+              COUNT(*) AS stream_count,
+              MIN(added_order) AS latest_order,
+              MAX(size) AS max_size,
+              group_concat(DISTINCT quality) AS qualities,
+              group_concat(DISTINCT language) AS languages
+            FROM items
+        """
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += """
+            GROUP BY group_title, COALESCE(year, 0)
+            ORDER BY {}
+            LIMIT ? OFFSET ?
+        """.format(order)
+        values.extend([limit + 1, offset])
+
+        with self.connect() as conn:
+            groups = conn.execute(sql, values).fetchall()
+
+        return groups[:limit], len(groups) > limit
+
+    def movie_group_items(self, title, year=0, limit=100):
+        where = ["media_type = 'movie'", "catalog_title = ?"]
+        values = [title]
+        if int(year or 0) > 0:
+            where.append("year = ?")
+            values.append(int(year))
+        else:
+            where.append("(year IS NULL OR year = 0)")
+        values.append(limit)
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT *
+                FROM items
+                WHERE {}
+                ORDER BY
+                  CASE quality
+                    WHEN '2160p' THEN 1
+                    WHEN '1080p' THEN 2
+                    WHEN '720p' THEN 3
+                    WHEN 'SD' THEN 4
+                    ELSE 5
+                  END,
+                  size DESC
+                LIMIT ?
+                """.format(" AND ".join(where)),
+                values,
+            ).fetchall()
 
     def series_titles(self, limit=50, offset=0, preset="recent"):
         order = "latest_order ASC"

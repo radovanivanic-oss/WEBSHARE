@@ -146,9 +146,25 @@ def parse_episode(name):
 
 def strip_noise(title):
     title = YEAR_RE.sub(" ", title or "")
-    title = re.sub(r"\b(2160p|1080p|720p|uhd|4k|fhd|cz|sk|en|multi)\b", " ", title, flags=re.I)
+    title = re.sub(
+        r"\b(2160p|1080p|720p|480p|uhd|4k|fhd|fullhd|hd|sd|web-dl|webrip|web|bluray|blu-ray|brrip|hdrip|dvdrip|hdtv|x264|x265|h264|h265|hevc|avc|xvid|aac|ac3|dts|eac3|ddp|atmos|hdr|dv|dolby|vision|cz|sk|en|eng|multi|dual|dabing|dab|titulky|tit)\b",
+        " ",
+        title,
+        flags=re.I,
+    )
+    title = re.sub(r"\[[^\]]*\]|\([^\)]*\)", " ", title)
+    title = re.sub(r"[-_\.]+", " ", title)
     title = re.sub(r"\s+", " ", title)
     return title.strip()
+
+
+def parse_catalog_title(name):
+    clean = normalize_title(name)
+    episode = parse_episode(clean)
+    if episode["media_type"] == "episode" and episode["series_title"]:
+        return episode["series_title"]
+    title = strip_noise(clean)
+    return title or clean
 
 
 def parse_item(item, added_order):
@@ -166,6 +182,7 @@ def parse_item(item, added_order):
     return {
         "ident": ident,
         "title": normalized or title,
+        "catalog_title": parse_catalog_title(name),
         "name": name,
         "size": size,
         "extension": item_extension(item),
