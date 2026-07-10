@@ -18,8 +18,8 @@ const LOGIN_URL = `${BASE_URL}/`;
 const SEARCH_URL = `${BASE_URL}/api/search/`;
 const FILE_LINK_URL = `${BASE_URL}/api/file_link/`;
 const SEARCH_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
-const MIN_VIDEO_SIZE = 1610612736;
-const MAX_VIDEO_SIZE = 10737418240;
+const MIN_VIDEO_SIZE = 1;
+const MAX_VIDEO_SIZE = Number.MAX_SAFE_INTEGER;
 const PAGE_LIMIT = 100;
 const SEARCH_SPLIT_SENTINEL = 1000;
 const MAX_PREFIX_DEPTH = 5;
@@ -1315,7 +1315,11 @@ async function publishExportsToGithub(config, logger) {
 function buildSummary(stats, finalCount) {
   return {
     found_videos: stats.foundVideos,
-    filtered_videos_1_5gb_to_10gb: stats.filteredVideos,
+    videos_after_size_validation: stats.filteredVideos,
+    size_filter: {
+      min_bytes: MIN_VIDEO_SIZE,
+      max_bytes: null,
+    },
     duplicates_removed: stats.duplicateVideos,
     api_requests: stats.apiRequests,
     duration_seconds: getDurationSeconds(stats),
