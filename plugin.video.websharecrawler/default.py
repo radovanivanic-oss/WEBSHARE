@@ -617,14 +617,16 @@ def movie_detail(params):
     title = params.get("catalog_title", "")
     year = int(params.get("year") or 0)
     rows = store().movie_group_items(title, year, limit=200)
-    metadata = load_page_metadata(rows)
+    group_row = {"group_title": title, "year": year}
+    group_meta = load_group_metadata([group_row]).get(movie_group_cache_key(group_row)) or {}
+    metadata = load_page_metadata(rows) if not group_meta else {}
 
     if rows:
         best = rows[0]
         item = xbmcgui.ListItem(label="[B]Prehrať najlepší stream[/B]")
         item.setProperty("IsPlayable", "true")
-        item.setInfo("video", build_video_info(best, metadata.get(best["ident"]) or {}, title))
-        item.setArt(build_art(metadata.get(best["ident"]) or {}))
+        best_meta = group_meta or metadata.get(best["ident"]) or {}
+        set_video_metadata(item, best, best_meta, best_meta.get("title") or title)
         xbmcplugin.addDirectoryItem(
             HANDLE,
             addon_url({"action": "play", "ident": best["ident"]}),
@@ -633,7 +635,7 @@ def movie_detail(params):
         )
 
     for row in rows:
-        add_playable(row, metadata.get(row["ident"]))
+        add_playable(row, group_meta or metadata.get(row["ident"]))
 
     xbmcplugin.setContent(HANDLE, "videos")
     xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
@@ -696,8 +698,7 @@ def add_movie_group(row, meta=None):
         "subtitle_type": "",
         "size": row["max_size"] or 0,
     }
-    item.setInfo("video", build_video_info(info_row, meta, title))
-    item.setArt(build_art(meta))
+    set_video_metadata(item, info_row, meta, title)
     item.setProperty("stream_count", str(row["stream_count"]))
     item.addContextMenuItems(
         [
@@ -865,9 +866,7 @@ def add_playable(row, meta=None):
     label = decorate_label(row)
     item = xbmcgui.ListItem(label=label)
     item.setProperty("IsPlayable", "true")
-    info = build_video_info(row, meta, display_title)
-    item.setInfo("video", info)
-    item.setArt(build_art(meta))
+    set_video_metadata(item, row, meta, display_title)
     item.setProperty("VideoCodec", codec_from_name(row["name"]))
     item.setProperty("VideoResolution", resolution_from_quality(row["quality"]))
     item.setProperty("AudioLanguage", row["language"] or "")
@@ -919,6 +918,21 @@ def add_playable(row, meta=None):
     )
 
 
+def set_video_metadata(item, row, meta, title):
+    info = build_video_info(row, meta, title)
+    item.setInfo("video", info)
+    item.setArt(build_art(meta))
+    item.setProperty("plot", info.get("plot") or "")
+    item.setProperty("description", info.get("plot") or "")
+    item.setProperty("genre", info.get("genre") or "")
+    item.setProperty("year", str(info.get("year") or ""))
+    item.setProperty("VideoCodec", codec_from_name(row["name"]))
+    item.setProperty("VideoResolution", resolution_from_quality(row["quality"]))
+    item.setProperty("AudioLanguage", row["language"] or "")
+    item.setProperty("AudioChannels", audio_channels_from_name(row["name"]))
+    item.setProperty("AspectRatio", aspect_ratio_from_name(row["name"]))
+
+
 def decorate_label(row):
     parts = [row["title"] or row["name"] or row["ident"]]
     meta = []
@@ -943,6 +957,7 @@ def build_video_info(row, meta, title):
         "originaltitle": meta.get("original_title") or row["name"] or title,
         "year": int(meta.get("year") or row["year"] or 0),
         "plot": plot if bool_setting("show_descriptions", True) else "",
+        "plotoutline": plot if bool_setting("show_descriptions", True) else "",
         "genre": " / ".join(genres) if genres else (row["genre"] if row["genre"] != "unknown" else ""),
         "rating": float(meta.get("rating") or 0),
         "duration": runtime * 60 if runtime else 0,

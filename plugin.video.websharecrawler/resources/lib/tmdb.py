@@ -12,7 +12,7 @@ from resources.lib.metadata import YEAR_RE, normalize_title
 
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMAGE = "https://image.tmdb.org/t/p/"
-USER_AGENT = "AG Kino Kodi Addon/0.6.1"
+USER_AGENT = "AG Kino Kodi Addon/0.6.2"
 
 
 def clean_query(title):
@@ -61,10 +61,15 @@ class TMDbClient(object):
             return None
 
         details = self._movie_details(movie["id"], self.language)
-        if not details and self.fallback_language and self.fallback_language != self.language:
-            details = self._movie_details(movie["id"], self.fallback_language)
+        fallback_details = None
+        if self.fallback_language and self.fallback_language != self.language:
+            fallback_details = self._movie_details(movie["id"], self.fallback_language)
+        if not details:
+            details = fallback_details
         if not details:
             return None
+        if fallback_details:
+            details = _merge_details(details, fallback_details)
 
         credits = details.get("credits") or {}
         crew = credits.get("crew") or []
@@ -132,6 +137,26 @@ def _image(path, size):
     if not path:
         return ""
     return TMDB_IMAGE + size + path
+
+
+def _merge_details(primary, fallback):
+    merged = dict(primary or {})
+    fallback = fallback or {}
+    for key in (
+        "overview",
+        "poster_path",
+        "backdrop_path",
+        "runtime",
+        "release_date",
+        "original_title",
+        "title",
+    ):
+        if not merged.get(key) and fallback.get(key):
+            merged[key] = fallback[key]
+    for key in ("genres", "production_countries", "credits"):
+        if not merged.get(key) and fallback.get(key):
+            merged[key] = fallback[key]
+    return merged
 
 
 def _year(date):
