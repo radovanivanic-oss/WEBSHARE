@@ -263,11 +263,45 @@ function isTemporarySearchError(error) {
   return Boolean(classifyTemporarySearchError(error));
 }
 
+function getXmlFieldValue(value) {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+
+  if (rawValue === undefined || rawValue === null) {
+    return null;
+  }
+
+  const text = String(rawValue).trim();
+  return text === "" ? null : text;
+}
+
+function normalizeOptionalString(value) {
+  return getXmlFieldValue(value);
+}
+
+function normalizeNumber(value, fallback = 0) {
+  const text = getXmlFieldValue(value);
+
+  if (text === null) {
+    return fallback;
+  }
+
+  const number = Number(text);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function normalizeFileType(value) {
+  const text = getXmlFieldValue(value);
+  return text ? text.replace(/^\./, "").toLowerCase() : null;
+}
+
 function normalizeFile(file) {
-  const ident = file.ident?.[0];
-  const name = file.name?.[0] || "";
-  const size = Number.parseInt(file.size?.[0] || "0", 10);
-  const extension = path.extname(name).replace(/^\./, "").toLowerCase() || null;
+  const ident = normalizeOptionalString(file.ident);
+  const name = normalizeOptionalString(file.name) || "";
+  const size = normalizeNumber(file.size);
+  const apiType = normalizeFileType(file.type);
+  const nameExtension =
+    path.extname(name).replace(/^\./, "").toLowerCase() || null;
+  const extension = apiType || nameExtension;
 
   if (!ident || !Number.isFinite(size)) {
     return null;
@@ -280,8 +314,15 @@ function normalizeFile(file) {
     title: name,
     size,
     extension,
-    mime: file.mime?.[0] || null,
-    type: file.type?.[0] || "video",
+    mime: normalizeOptionalString(file.mime),
+    type: apiType || extension || "video",
+    img: normalizeOptionalString(file.img),
+    stripe: normalizeOptionalString(file.stripe),
+    stripe_count: normalizeNumber(file.stripe_count),
+    queued: normalizeNumber(file.queued),
+    positive_votes: normalizeNumber(file.positive_votes),
+    negative_votes: normalizeNumber(file.negative_votes),
+    password_protected: normalizeNumber(file.password) === 1,
     category: "video",
     source: "webshare",
     needsFileLink: true,
@@ -1430,6 +1471,7 @@ if (require.main === module) {
 module.exports = {
   createWebshareResolver,
   getConfig,
+  normalizeFile,
   publishExportsToGithub,
   resolveIdentToStreamUrl,
 };
