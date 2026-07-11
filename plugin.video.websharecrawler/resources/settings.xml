@@ -16,8 +16,12 @@
   </category>
 
   <category label="Streamy">
-    <setting id="catalog_url" type="text" label="Primárny katalóg (.json.gz)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json.gz"/>
-    <setting id="fallback_catalog_url" type="text" label="Záložný katalóg (.json)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json"/>
+    <setting id="catalog_url" type="text" label="Katalóg všetko (.json.gz)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json.gz"/>
+    <setting id="fallback_catalog_url" type="text" label="Záložný katalóg všetko (.json)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json"/>
+    <setting id="movie_catalog_url" type="text" label="Katalóg filmov (.json.gz)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_movies.json.gz"/>
+    <setting id="movie_fallback_catalog_url" type="text" label="Záložný katalóg filmov (.json)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_movies.json"/>
+    <setting id="series_catalog_url" type="text" label="Katalóg seriálov (.json.gz)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_series.json.gz"/>
+    <setting id="series_fallback_catalog_url" type="text" label="Záložný katalóg seriálov (.json)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_series.json"/>
     <setting id="stream_autoselect" type="bool" label="Automatický výber streamu" default="true"/>
     <setting id="cache_ttl_hours" type="number" label="Platnosť stream cache v hodinách" default="6"/>
     <setting id="prefer_language" type="labelenum" label="Primárny jazyk" values="Bez preferencie|CZ|SK|CZ/SK|EN|Multi" default="0"/>
@@ -43,8 +47,11 @@
   </category>
 
   <category label="Nástroje">
-    <setting id="auto_index" type="bool" label="Automaticky indexovať pri prvom spustení" default="true"/>
-    <setting type="action" label="Preindexovať katalóg" action="RunPlugin(plugin://plugin.video.websharecrawler?action=reindex)"/>
+    <setting id="auto_index" type="bool" label="Automaticky indexovať po otvorení typu katalógu" default="true"/>
+    <setting type="action" label="Preindexovať aktívny katalóg" action="RunPlugin(plugin://plugin.video.websharecrawler?action=reindex)"/>
+    <setting type="action" label="Preindexovať filmy" action="RunPlugin(plugin://plugin.video.websharecrawler?action=reindex&amp;catalog_scope=movie)"/>
+    <setting type="action" label="Preindexovať seriály" action="RunPlugin(plugin://plugin.video.websharecrawler?action=reindex&amp;catalog_scope=series)"/>
+    <setting type="action" label="Preindexovať všetko" action="RunPlugin(plugin://plugin.video.websharecrawler?action=reindex&amp;catalog_scope=all)"/>
     <setting type="action" label="Vymazať lokálny index" action="RunPlugin(plugin://plugin.video.websharecrawler?action=clear_index)"/>
     <setting type="action" label="Vymazať cache metadát" action="RunPlugin(plugin://plugin.video.websharecrawler?action=clear_metadata_cache)"/>
     <setting type="action" label="Vymazať resolver cache" action="RunPlugin(plugin://plugin.video.websharecrawler?action=clear_resolver_cache)"/>
@@ -61,7 +68,7 @@
   </category>
 
   <category label="Informácie">
-    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.6.6" enable="false"/>
+    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.6.7" enable="false"/>
     <setting id="catalog_status_info" type="text" label="Stav katalógu" default="Lokálny SQLite index" enable="false"/>
     <setting id="catalog_items_info" type="text" label="Počet indexovaných položiek" default="Pozri Nástroje / Katalóg" enable="false"/>
     <setting id="catalog_updated_info" type="text" label="Posledná aktualizácia" default="Pozri Nástroje / Katalóg" enable="false"/>

@@ -22,10 +22,42 @@ ADDON = xbmcaddon.Addon()
 HANDLE = int(sys.argv[1])
 BASE_URL = sys.argv[0]
 PAGE_SIZE = 50
-DEFAULT_CATALOG_URL = "https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json.gz"
-DEFAULT_FALLBACK_CATALOG_URL = "https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json"
+CATALOG_BASE_URL = "https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog"
+DEFAULT_CATALOG_URL = CATALOG_BASE_URL + "/videos_all.json.gz"
+DEFAULT_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_all.json"
+DEFAULT_MOVIE_CATALOG_URL = CATALOG_BASE_URL + "/videos_movies.json.gz"
+DEFAULT_MOVIE_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_movies.json"
+DEFAULT_SERIES_CATALOG_URL = CATALOG_BASE_URL + "/videos_series.json.gz"
+DEFAULT_SERIES_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_series.json"
 OLD_CATALOG_URL = "http://192.168.2.226/videos_all.json.gz"
 OLD_FALLBACK_CATALOG_URL = "http://192.168.2.226/videos_all.json"
+
+CATALOG_SCOPES = {
+    "all": {
+        "label": "Všetko",
+        "primary_setting": "catalog_url",
+        "fallback_setting": "fallback_catalog_url",
+        "primary_default": DEFAULT_CATALOG_URL,
+        "fallback_default": DEFAULT_FALLBACK_CATALOG_URL,
+        "media_type": None,
+    },
+    "movie": {
+        "label": "Filmy",
+        "primary_setting": "movie_catalog_url",
+        "fallback_setting": "movie_fallback_catalog_url",
+        "primary_default": DEFAULT_MOVIE_CATALOG_URL,
+        "fallback_default": DEFAULT_MOVIE_FALLBACK_CATALOG_URL,
+        "media_type": "movie",
+    },
+    "series": {
+        "label": "Seriály",
+        "primary_setting": "series_catalog_url",
+        "fallback_setting": "series_fallback_catalog_url",
+        "primary_default": DEFAULT_SERIES_CATALOG_URL,
+        "fallback_default": DEFAULT_SERIES_FALLBACK_CATALOG_URL,
+        "media_type": "episode",
+    },
+}
 
 
 def setting(key, default=""):
@@ -57,18 +89,38 @@ def store():
     return AtlasStore()
 
 
-def indexer():
-    catalog_url = setting("catalog_url", DEFAULT_CATALOG_URL)
-    fallback_catalog_url = setting("fallback_catalog_url", DEFAULT_FALLBACK_CATALOG_URL)
+def catalog_scope_for_params(params=None):
+    params = params or {}
+    explicit = params.get("catalog_scope")
+    if explicit in CATALOG_SCOPES:
+        return explicit
+    media_type = params.get("media_type")
+    if media_type == "movie":
+        return "movie"
+    if media_type == "episode" or params.get("series_title"):
+        return "series"
+    return "all"
+
+
+def catalog_scope_config(scope):
+    return CATALOG_SCOPES.get(scope) or CATALOG_SCOPES["all"]
+
+
+def indexer(scope="all"):
+    config = catalog_scope_config(scope)
+    catalog_url = setting(config["primary_setting"], config["primary_default"])
+    fallback_catalog_url = setting(config["fallback_setting"], config["fallback_default"])
     if catalog_url == OLD_CATALOG_URL:
-        catalog_url = DEFAULT_CATALOG_URL
-        ADDON.setSetting("catalog_url", catalog_url)
+        catalog_url = config["primary_default"]
+        ADDON.setSetting(config["primary_setting"], catalog_url)
     if fallback_catalog_url == OLD_FALLBACK_CATALOG_URL:
-        fallback_catalog_url = DEFAULT_FALLBACK_CATALOG_URL
-        ADDON.setSetting("fallback_catalog_url", fallback_catalog_url)
+        fallback_catalog_url = config["fallback_default"]
+        ADDON.setSetting(config["fallback_setting"], fallback_catalog_url)
     return CatalogIndexer(
         catalog_url=catalog_url,
         fallback_catalog_url=fallback_catalog_url,
+        catalog_key=scope,
+        media_type=config["media_type"],
     )
 
 
@@ -106,14 +158,18 @@ def fallback_art():
     return os.path.join(ADDON.getAddonInfo("path"), "icon.png")
 
 
-def ensure_index():
+def ensure_index(scope="all"):
     if not bool_setting("auto_index", True):
         return
 
-    catalog_indexer = indexer()
+    config = catalog_scope_config(scope)
+    catalog_indexer = indexer(scope)
     if catalog_indexer.needs_rebuild():
         progress = xbmcgui.DialogProgress()
-        progress.create(ADDON.getAddonInfo("name"), "Indexujem lokálny katalóg...")
+        progress.create(
+            ADDON.getAddonInfo("name"),
+            "Indexujem katalóg: {}...".format(config["label"]),
+        )
 
         def on_progress(done, total):
             if total:
@@ -172,7 +228,6 @@ def add_home_context(item, label, query):
 
 
 def root_menu():
-    ensure_index()
     hidden = store().hidden_home_keys()
     add_home_item("quick-search-movies", hidden, "[B]Rýchle hľadanie filmov[/B]", "search", {"media_type": "movie"})
     add_home_item("quick-search-series", hidden, "[B]Rýchle hľadanie seriálov[/B]", "search", {"media_type": "episode"})
@@ -382,7 +437,10 @@ def audio_subtitles_menu(params=None):
 
 def tools_menu():
     add_directory("Katalóg", "catalog")
-    add_command("Preindexovať katalóg", "reindex")
+    add_command("Preindexovať aktívny katalóg", "reindex")
+    add_command("Preindexovať filmy", "reindex", {"catalog_scope": "movie"})
+    add_command("Preindexovať seriály", "reindex", {"catalog_scope": "series"})
+    add_command("Preindexovať všetko", "reindex", {"catalog_scope": "all"})
     add_command("Vymazať lokálny index", "clear_index")
     add_command("Vymazať cache metadát", "clear_metadata_cache")
     add_command("Vymazať resolver cache", "clear_resolver_cache")
@@ -394,6 +452,8 @@ def tools_menu():
 
 def catalog_menu():
     state = store().catalog_state()
+    scope = state.get("catalog_key") or "none"
+    scope_label = catalog_scope_config(scope)["label"] if scope in CATALOG_SCOPES else "Žiadny"
     total = state.get("item_count") or 0
     movies = state.get("movie_count") or 0
     episodes = state.get("episode_count") or 0
@@ -401,13 +461,14 @@ def catalog_menu():
     updated = state.get("indexed_at") or "neznáme"
     source = state.get("source_url") or setting("catalog_url")
 
+    add_command("Aktívny katalóg: {}".format(scope_label), "catalog_status")
     add_command("Stav: {} položiek".format(total), "catalog_status")
     add_command("Filmy: {}".format(movies), "catalog_status")
     add_command("Epizódy: {}".format(episodes), "catalog_status")
     add_command("Nezaradené: {}".format(unknown), "catalog_status")
     add_command("Indexované: {}".format(updated), "catalog_status")
     add_command("Zdroj: {}".format(source), "catalog_status")
-    add_command("Preindexovať katalóg", "reindex")
+    add_command("Preindexovať aktívny katalóg", "reindex", {"catalog_scope": scope if scope in CATALOG_SCOPES else "all"})
     add_command("Vymazať index", "clear_index")
     add_command("Vymazať cache metadát", "clear_metadata_cache")
     add_command("Vymazať resolver cache", "clear_resolver_cache")
@@ -627,7 +688,7 @@ def listing_action(query):
 
 
 def movie_groups(params):
-    ensure_index()
+    ensure_index("movie")
     page = int(params.get("page", "0"))
     limit = page_size()
     offset = page * limit
@@ -646,6 +707,7 @@ def movie_groups(params):
 
 
 def movie_detail(params):
+    ensure_index("movie")
     title = params.get("catalog_title", "")
     year = int(params.get("year") or 0)
     rows = store().movie_group_items(title, year, limit=200)
@@ -803,6 +865,7 @@ def compact_csv(value, skip=()):
 
 
 def series_titles(params):
+    ensure_index("series")
     page = int(params.get("page", "0"))
     limit = page_size()
     offset = page * limit
@@ -822,6 +885,7 @@ def series_titles(params):
 
 
 def series_detail(params):
+    ensure_index("series")
     title = params.get("series_title", "")
     seasons = store().series_seasons(title)
     if not seasons:
@@ -838,7 +902,7 @@ def series_detail(params):
 
 
 def list_items(params):
-    ensure_index()
+    ensure_index(catalog_scope_for_params(params))
     page = int(params.get("page", "0"))
     limit = page_size()
     offset = page * limit
@@ -1203,9 +1267,14 @@ def mark_watched(params):
     notify("Označené ako pozreté")
 
 
-def reindex():
-    indexer().rebuild()
-    notify("Katalóg je preindexovaný")
+def reindex(params=None):
+    params = params or {}
+    state = store().catalog_state()
+    scope = params.get("catalog_scope") or state.get("catalog_key") or "all"
+    if scope not in CATALOG_SCOPES:
+        scope = "all"
+    indexer(scope).rebuild()
+    notify("Katalóg {} je preindexovaný".format(catalog_scope_config(scope)["label"]))
     catalog_menu()
 
 
@@ -1301,7 +1370,7 @@ def router():
         "favorite_add": lambda: favorite_add(params),
         "favorite_remove": lambda: favorite_remove(params),
         "mark_watched": lambda: mark_watched(params),
-        "reindex": reindex,
+        "reindex": lambda: reindex(params),
         "clear_index": clear_index,
         "clear_history": clear_history,
         "pin_add": lambda: pin_add(params),
