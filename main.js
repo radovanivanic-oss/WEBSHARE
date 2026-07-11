@@ -5,7 +5,6 @@ const fs = require("fs");
 const fsPromises = fs.promises;
 const os = require("os");
 const path = require("path");
-const puppeteer = require("puppeteer");
 const readline = require("readline");
 const util = require("util");
 const { parseStringPromise } = require("xml2js");
@@ -14,7 +13,8 @@ const zlib = require("zlib");
 const execFileAsync = util.promisify(execFile);
 
 const BASE_URL = "https://webshare.cz";
-const LOGIN_URL = `${BASE_URL}/`;
+const SALT_URL = `${BASE_URL}/api/salt/`;
+const API_LOGIN_URL = `${BASE_URL}/api/login/`;
 const SEARCH_URL = `${BASE_URL}/api/search/`;
 const FILE_LINK_URL = `${BASE_URL}/api/file_link/`;
 const SEARCH_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
@@ -24,7 +24,6 @@ const PAGE_LIMIT = 100;
 const SEARCH_SPLIT_SENTINEL = 1000;
 const MAX_PREFIX_DEPTH = 5;
 const REQUEST_TIMEOUT_MS = 30000;
-const LOGIN_TIMEOUT_MS = 45000;
 const RETRY_COUNT = 5;
 const RETRY_BASE_DELAY_MS = 1000;
 const RETRY_MAX_DELAY_MS = 30000;
@@ -33,6 +32,9 @@ const CHECKPOINT_SAVE_INTERVAL = 10;
 const PREFIX_CONCURRENCY = 3;
 const FILE_LINK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SEEN_BUCKET_CACHE_LIMIT = 16;
+const MD5_CRYPT_MAGIC = "$1$";
+const MD5_CRYPT_ALPHABET =
+  "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -633,48 +635,164 @@ function buildHealthReport({ success, videos, durationSeconds }) {
   };
 }
 
-async function loginAndGetWst({ username, password }) {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+function toMd5CryptBase64(value, length) {
+  let result = "";
+  let current = value;
 
-  try {
-    const page = await browser.newPage();
-    await page.setUserAgent(USER_AGENT);
-    await page.goto(LOGIN_URL, {
-      waitUntil: "networkidle2",
-      timeout: LOGIN_TIMEOUT_MS,
-    });
+  for (let index = 0; index < length; index += 1) {
+    result += MD5_CRYPT_ALPHABET[current & 0x3f];
+    current >>= 6;
+  }
 
-    await page.click("a.login");
-    await page.waitForSelector('input[name="username"]', {
-      timeout: LOGIN_TIMEOUT_MS,
-    });
-    await page.type('input[name="username"]', username, { delay: 20 });
-    await page.type('input[name="password"]', password, { delay: 20 });
+  return result;
+}
 
-    await Promise.all([
-      page.waitForNavigation({
-        waitUntil: "networkidle2",
-        timeout: LOGIN_TIMEOUT_MS,
-      }).catch(() => null),
-      page.click('input.ws-small-button.green.ws-margin-bottom-10[type="submit"]'),
-    ]);
+function createMd5Digest(...parts) {
+  const hash = crypto.createHash("md5");
 
-    await sleep(1500);
+  for (const part of parts) {
+    hash.update(part);
+  }
 
-    const cookies = await page.cookies();
-    const wstCookie = cookies.find((cookie) => cookie.name === "wst");
+  return hash.digest();
+}
 
-    if (!wstCookie?.value) {
-      throw new Error("Cookie wst po prihlásení nebola nájdená.");
+function md5Crypt(password, salt) {
+  const passwordBuffer = Buffer.from(password, "utf8");
+  const saltText = String(salt || "").split("$")[0].slice(0, 8);
+  const saltBuffer = Buffer.from(saltText, "utf8");
+  const magicBuffer = Buffer.from(MD5_CRYPT_MAGIC, "ascii");
+
+  const context = crypto.createHash("md5");
+  context.update(passwordBuffer);
+  context.update(magicBuffer);
+  context.update(saltBuffer);
+
+  const alternate = createMd5Digest(passwordBuffer, saltBuffer, passwordBuffer);
+  let remaining = passwordBuffer.length;
+
+  while (remaining > 0) {
+    context.update(alternate.subarray(0, Math.min(16, remaining)));
+    remaining -= 16;
+  }
+
+  for (let index = passwordBuffer.length; index > 0; index >>= 1) {
+    context.update(
+      index & 1 ? Buffer.from([0]) : passwordBuffer.subarray(0, 1)
+    );
+  }
+
+  let finalDigest = context.digest();
+
+  for (let index = 0; index < 1000; index += 1) {
+    const loop = crypto.createHash("md5");
+
+    if (index & 1) {
+      loop.update(passwordBuffer);
+    } else {
+      loop.update(finalDigest);
     }
 
-    return wstCookie.value;
-  } finally {
-    await browser.close();
+    if (index % 3) {
+      loop.update(saltBuffer);
+    }
+
+    if (index % 7) {
+      loop.update(passwordBuffer);
+    }
+
+    if (index & 1) {
+      loop.update(finalDigest);
+    } else {
+      loop.update(passwordBuffer);
+    }
+
+    finalDigest = loop.digest();
   }
+
+  let hash = "";
+  hash += toMd5CryptBase64(
+    (finalDigest[0] << 16) | (finalDigest[6] << 8) | finalDigest[12],
+    4
+  );
+  hash += toMd5CryptBase64(
+    (finalDigest[1] << 16) | (finalDigest[7] << 8) | finalDigest[13],
+    4
+  );
+  hash += toMd5CryptBase64(
+    (finalDigest[2] << 16) | (finalDigest[8] << 8) | finalDigest[14],
+    4
+  );
+  hash += toMd5CryptBase64(
+    (finalDigest[3] << 16) | (finalDigest[9] << 8) | finalDigest[15],
+    4
+  );
+  hash += toMd5CryptBase64(
+    (finalDigest[4] << 16) | (finalDigest[10] << 8) | finalDigest[5],
+    4
+  );
+  hash += toMd5CryptBase64(finalDigest[11], 2);
+
+  return `${MD5_CRYPT_MAGIC}${saltText}$${hash}`;
+}
+
+function createWebsharePasswordHash(password, salt) {
+  return crypto
+    .createHash("sha1")
+    .update(md5Crypt(password, salt), "utf8")
+    .digest("hex");
+}
+
+function createWebshareLoginDigest(username, passwordHash) {
+  return crypto
+    .createHash("md5")
+    .update(`${username}:Webshare:${passwordHash}`, "utf8")
+    .digest("hex");
+}
+
+async function postWebshareXml(client, url, params, endpointName) {
+  const response = await client.post(url, params.toString());
+  const parsed = await parseStringPromise(response.data, {
+    explicitArray: true,
+    trim: true,
+  });
+
+  return parseStatus(parsed, endpointName);
+}
+
+async function loginAndGetWst({ username, password }) {
+  const client = createApiClient();
+  const saltResponse = await postWebshareXml(
+    client,
+    SALT_URL,
+    new URLSearchParams({ username_or_email: username }),
+    "salt"
+  );
+  const salt = saltResponse.salt?.[0];
+
+  if (!salt) {
+    throw new Error("Webshare API nevrátilo salt.");
+  }
+
+  const passwordHash = createWebsharePasswordHash(password, salt);
+  const loginResponse = await postWebshareXml(
+    client,
+    API_LOGIN_URL,
+    new URLSearchParams({
+      username_or_email: username,
+      password: passwordHash,
+      digest: createWebshareLoginDigest(username, passwordHash),
+      keep_logged_in: "1",
+    }),
+    "login"
+  );
+  const token = loginResponse.token?.[0] || loginResponse.wst?.[0];
+
+  if (!token) {
+    throw new Error("Webshare API nevrátilo WST token.");
+  }
+
+  return token;
 }
 
 class WebshareSession {
@@ -700,7 +818,7 @@ class WebshareSession {
           username: this.config.username,
           password: this.config.password,
         }),
-      "Puppeteer login",
+      "Webshare API login",
       this.logger
     );
     return this.cachedWst;
@@ -762,11 +880,12 @@ async function fetchSearchPage(client, session, { prefix, offset, limit }, stats
   });
 }
 
-async function resolveFileLink(client, ident, logger, stats) {
+async function resolveFileLink(client, ident, wst, logger, stats) {
   return retry(
     async () => {
       const params = new URLSearchParams({
         ident,
+        wst,
         download_type: "video_stream",
         force_https: "1",
       });
@@ -1400,8 +1519,8 @@ async function resolveIdentToStreamUrl(ident, options = {}) {
 
   const client = createApiClient();
   const session = new WebshareSession(config, logger);
-  const resolvedUrl = await session.withWst(() =>
-    resolveFileLink(client, ident, logger, stats)
+  const resolvedUrl = await session.withWst((wst) =>
+    resolveFileLink(client, ident, wst, logger, stats)
   );
 
   if (!resolvedUrl) {
