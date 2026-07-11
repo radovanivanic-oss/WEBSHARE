@@ -16,8 +16,8 @@
   </category>
 
   <category label="Streamy">
-    <setting id="catalog_url" type="text" label="Primárny katalóg (.json.gz)" default="http://192.168.2.226/videos_all.json.gz"/>
-    <setting id="fallback_catalog_url" type="text" label="Záložný katalóg (.json)" default="http://192.168.2.226/videos_all.json"/>
+    <setting id="catalog_url" type="text" label="Primárny katalóg (.json.gz)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json.gz"/>
+    <setting id="fallback_catalog_url" type="text" label="Záložný katalóg (.json)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json"/>
     <setting id="stream_autoselect" type="bool" label="Automatický výber streamu" default="true"/>
     <setting id="cache_ttl_hours" type="number" label="Platnosť stream cache v hodinách" default="6"/>
     <setting id="prefer_language" type="labelenum" label="Primárny jazyk" values="Bez preferencie|CZ|SK|CZ/SK|EN|Multi" default="0"/>
@@ -61,7 +61,7 @@
   </category>
 
   <category label="Informácie">
-    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.6.5" enable="false"/>
+    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.6.6" enable="false"/>
     <setting id="catalog_status_info" type="text" label="Stav katalógu" default="Lokálny SQLite index" enable="false"/>
     <setting id="catalog_items_info" type="text" label="Počet indexovaných položiek" default="Pozri Nástroje / Katalóg" enable="false"/>
     <setting id="catalog_updated_info" type="text" label="Posledná aktualizácia" default="Pozri Nástroje / Katalóg" enable="false"/>

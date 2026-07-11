@@ -22,6 +22,10 @@ ADDON = xbmcaddon.Addon()
 HANDLE = int(sys.argv[1])
 BASE_URL = sys.argv[0]
 PAGE_SIZE = 50
+DEFAULT_CATALOG_URL = "https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json.gz"
+DEFAULT_FALLBACK_CATALOG_URL = "https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json"
+OLD_CATALOG_URL = "http://192.168.2.226/videos_all.json.gz"
+OLD_FALLBACK_CATALOG_URL = "http://192.168.2.226/videos_all.json"
 
 
 def setting(key, default=""):
@@ -54,11 +58,17 @@ def store():
 
 
 def indexer():
+    catalog_url = setting("catalog_url", DEFAULT_CATALOG_URL)
+    fallback_catalog_url = setting("fallback_catalog_url", DEFAULT_FALLBACK_CATALOG_URL)
+    if catalog_url == OLD_CATALOG_URL:
+        catalog_url = DEFAULT_CATALOG_URL
+        ADDON.setSetting("catalog_url", catalog_url)
+    if fallback_catalog_url == OLD_FALLBACK_CATALOG_URL:
+        fallback_catalog_url = DEFAULT_FALLBACK_CATALOG_URL
+        ADDON.setSetting("fallback_catalog_url", fallback_catalog_url)
     return CatalogIndexer(
-        catalog_url=setting("catalog_url", "http://192.168.2.226/videos_all.json.gz"),
-        fallback_catalog_url=setting(
-            "fallback_catalog_url", "http://192.168.2.226/videos_all.json"
-        ),
+        catalog_url=catalog_url,
+        fallback_catalog_url=fallback_catalog_url,
     )
 
 
