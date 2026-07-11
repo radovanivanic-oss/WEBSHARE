@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -18,7 +19,7 @@ SALT_URL = BASE_URL + "/api/salt/"
 LOGIN_URL = BASE_URL + "/api/login/"
 FILE_LINK_URL = BASE_URL + "/api/file_link/"
 USER_DATA_URL = BASE_URL + "/api/user_data/"
-USER_AGENT = "Kodi Webshare Crawler Catalog/0.1"
+USER_AGENT = "AG Kino Kodi Addon/0.6.5"
 MD5_CRYPT_MAGIC = "$1$"
 ITOA64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
@@ -145,6 +146,7 @@ class WebshareResolver(object):
         self.cache_ttl_seconds = cache_ttl_seconds
         self.cache_path = os.path.join(_cache_dir(), "resolved_urls.json")
         self.wst_path = os.path.join(_cache_dir(), "wst.json")
+        self.device_uuid_path = os.path.join(_cache_dir(), "device_uuid.json")
 
     @staticmethod
     def clear_cache():
@@ -254,6 +256,16 @@ class WebshareResolver(object):
         except OSError:
             pass
 
+    def _device_uuid(self):
+        cached = self._load_json(self.device_uuid_path, {})
+        value = cached.get("device_uuid")
+        if value:
+            return value
+
+        value = str(uuid.uuid4())
+        self._save_json(self.device_uuid_path, {"device_uuid": value})
+        return value
+
     def _login(self):
         if not self.username or not self.password:
             raise ResolverError("Nastav Webshare meno a heslo v nastaveniach addonu")
@@ -284,6 +296,7 @@ class WebshareResolver(object):
                 "wst": wst,
                 "download_type": "video_stream",
                 "force_https": "1",
+                "device_uuid": self._device_uuid(),
             },
         )
         link = _text(response, "link")
