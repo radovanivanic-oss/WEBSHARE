@@ -19,4 +19,13 @@ if [ -f publish-exports.js ]; then
   node --check publish-exports.js
 fi
 
+if [ -f server/catalog-api.js ]; then
+  node --check server/catalog-api.js
+  node --check scripts/import-catalog-jsonl.js
+  node --check scripts/enrich-metadata.js
+  node --check scripts/reclassify-catalog.js
+  node --check scripts/update-catalog-database.js
+  node --check scripts/create-catalog-manifest.js
+fi
+
 echo "Deploy OK"

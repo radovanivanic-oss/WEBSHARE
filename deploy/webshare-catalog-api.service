@@ -1,0 +1,22 @@
+[Unit]
+Description=Webshare read-only catalog API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=radeco
+Group=radeco
+WorkingDirectory=/home/radeco/webshare-crawler
+EnvironmentFile=/home/radeco/webshare-crawler/.env
+ExecStart=/bin/bash -lc '. /home/radeco/.nvm/nvm.sh && exec node server/catalog-api.js'
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/radeco/webshare-crawler/data /home/radeco/webshare-crawler/runtime
+
+[Install]
+WantedBy=multi-user.target

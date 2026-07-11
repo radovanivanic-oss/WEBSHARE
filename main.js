@@ -59,6 +59,7 @@ function getConfig(options = {}) {
   const outputPath = process.env.OUTPUT_JSON_PATH || DEFAULT_OUTPUT_PATH;
   const catalogChunkSize = normalizeChunkSize(process.env.CATALOG_CHUNK_SIZE);
   const exportLegacyAll = normalizeBoolean(process.env.EXPORT_LEGACY_ALL, true);
+  const catalogRetainJsonl = normalizeBoolean(process.env.CATALOG_RETAIN_JSONL, true);
   const githubExportEnabled = process.env.GITHUB_EXPORT_ENABLED === "true";
   const githubExportBranch = process.env.GITHUB_EXPORT_BRANCH || "data";
   const githubExportRepoUrl = process.env.GITHUB_EXPORT_REPO_URL || null;
@@ -91,6 +92,8 @@ function getConfig(options = {}) {
     failedPrefixesPath: path.join(runtimeDir, "failed-prefixes.json"),
     resolverCachePath: path.join(runtimeDir, "webshare-file-link-cache.json"),
     catalogJsonlPath: path.join(runtimeDir, "catalog-items.jsonl"),
+    catalogSourceManifestPath: path.join(runtimeDir, "catalog-items.manifest.json"),
+    catalogRetainJsonl,
     seenIndexDir: path.join(runtimeDir, "seen-idents"),
     githubExportEnabled,
     githubExportBranch,
@@ -1305,9 +1308,35 @@ async function prepareRuntime(config) {
 }
 
 async function cleanupIntermediateArtifacts(config, logger) {
-  await removePathIfExists(config.catalogJsonlPath);
+  if (config.catalogRetainJsonl) {
+    logger.info("Surový JSONL katalóg ponechávam pre SQLite import.", {
+      catalogJsonlPath: config.catalogJsonlPath,
+      catalogSourceManifestPath: config.catalogSourceManifestPath,
+      catalogRetainJsonl: config.catalogRetainJsonl,
+    });
+  } else {
+    await removePathIfExists(config.catalogJsonlPath);
+  }
   await removePathIfExists(config.seenIndexDir);
-  logger.info("Dočasné crawl artefakty boli odstránené.");
+  logger.info("Dočasný seen-idents index bol odstránený.");
+}
+
+async function writeCatalogSourceManifest(config, finalCount, logger) {
+  const failedPrefixes = await loadFailedPrefixes(config.failedPrefixesPath, logger);
+  const stat = await fsPromises.stat(config.catalogJsonlPath);
+  const manifest = {
+    success: true,
+    is_full: failedPrefixes.length === 0,
+    generated_at: new Date().toISOString(),
+    source_path: config.catalogJsonlPath,
+    source_size: stat.size,
+    source_mtime_ms: Math.trunc(stat.mtimeMs),
+    items: finalCount,
+    failed_prefixes: failedPrefixes.length,
+  };
+  await writeJsonAtomically(config.catalogSourceManifestPath, manifest);
+  logger.info("Zapísaný manifest surového katalógu.", manifest);
+  return manifest;
 }
 
 async function writeHealthReport(config, report) {
@@ -1563,6 +1592,7 @@ async function crawlAllVideos(config, logger, stats) {
   );
   const exportResult = await runCatalogExport(config, logger, stats);
   const finalCount = exportResult.total;
+  const catalogSourceManifest = await writeCatalogSourceManifest(config, finalCount, logger);
 
   await writeHealthReport(
     config,
@@ -1590,6 +1620,7 @@ async function crawlAllVideos(config, logger, stats) {
     logPath: config.logPath,
     healthPath: config.healthPath,
     githubExport,
+    catalogSourceManifest,
     summary: buildSummary(stats, finalCount, exportResult),
   };
 }
@@ -1701,6 +1732,8 @@ async function main() {
       logPath: config.logPath,
       healthPath: config.healthPath,
       catalogJsonlPath: config.catalogJsonlPath,
+      catalogSourceManifestPath: config.catalogSourceManifestPath,
+      catalogRetainJsonl: config.catalogRetainJsonl,
       seenIndexDir: config.seenIndexDir,
       catalogOutputDir: config.catalogOutputDir,
       catalogChunkSize: config.catalogChunkSize,

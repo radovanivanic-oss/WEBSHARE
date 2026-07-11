@@ -19,7 +19,7 @@ SALT_URL = BASE_URL + "/api/salt/"
 LOGIN_URL = BASE_URL + "/api/login/"
 FILE_LINK_URL = BASE_URL + "/api/file_link/"
 USER_DATA_URL = BASE_URL + "/api/user_data/"
-USER_AGENT = "AG Kino Kodi Addon/0.6.6"
+USER_AGENT = "AG Kino Kodi Addon/0.7.0"
 MD5_CRYPT_MAGIC = "$1$"
 ITOA64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 

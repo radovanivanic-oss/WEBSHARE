@@ -1,5 +1,17 @@
 # AG Kino Kodi Addon
 
+## Katalógové API
+
+Od verzie 0.7.0 môže addon namiesto veľkých JSON súborov používať stránkované serverové API.
+
+V nastaveniach zapni `Používať stránkované katalógové API` a nastav napríklad:
+
+```text
+http://192.168.2.226/api
+```
+
+Pri vypnutom API režime zostáva aktívny pôvodný JSON/SQLite workflow. Webshare login a `api/file_link` resolver zostávajú v Kodi a server nikdy neposiela WST token.
+
 AG Kino je Kodi video addon nad lokálnym exportom z Webshare crawlera.
 
 Crawler ostáva oddelený:

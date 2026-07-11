@@ -4,7 +4,7 @@ Node.js crawler pre `webshare.cz`, určený na Ubuntu server a spúšťanie cez 
 
 ## Požiadavky
 
-- Node.js `20+`
+- Node.js `22+` (Ubuntu server používa Node.js 24 LTS)
 - Ubuntu server
 - ENV premenné:
   - `WEBSHARE_USERNAME`
@@ -113,3 +113,36 @@ Addon `plugin.video.websharecrawler` je oddelená vrstva nad hotovým katalógom
 - metadata z TMDb sa načítavajú len na požiadanie pre aktuálny listing a ukladajú sa do lokálnej SQLite cache.
 
 TMDb API kľúč, Webshare meno a heslo patria iba do nastavení addonu v Kodi, nikdy nie do repozitára.
+
+## Katalógový mediálny server
+
+Projekt obsahuje aj novú serverovú pipeline nad SQLite:
+
+```text
+runtime/catalog-items.jsonl
+→ streaming import
+→ parser a grouping
+→ data/catalog.sqlite
+→ voliteľný TMDb enrichment
+→ read-only REST API
+→ Kodi API režim
+```
+
+Základné príkazy:
+
+```bash
+npm run db:migrate
+npm run catalog:import -- --input runtime/catalog-items.jsonl --full
+npm run metadata:enrich -- --limit 1000
+npm run catalog:reclassify
+npm run api:start
+```
+
+Celý bezpečný crawler + SQLite update tok na Ubuntu:
+
+```bash
+bash scripts/run-crawler-and-update.sh
+```
+
+API štandardne počúva iba na `127.0.0.1:8787` a je určené pre nginx reverse proxy cez `/api/`.
+Podrobná architektúra a bezpečné nasadenie sú v `docs/CATALOG-SERVER.md`.

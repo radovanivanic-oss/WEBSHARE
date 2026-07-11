@@ -29,3 +29,16 @@ fi
 echo
 echo "== exported files =="
 ls -lh /var/www/html/videos_all.json /var/www/html/videos_all.json.gz
+
+echo
+echo "== catalog database =="
+if [ -f "$PROJECT_DIR/data/catalog.sqlite" ]; then
+  ls -lh "$PROJECT_DIR/data/catalog.sqlite"
+else
+  echo "Catalog database not found"
+fi
+
+echo
+echo "== catalog API =="
+curl --silent --show-error --max-time 5 http://127.0.0.1:8787/api/health || true
+echo

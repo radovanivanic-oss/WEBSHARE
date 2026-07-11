@@ -13,6 +13,7 @@ import xbmcgui
 import xbmcplugin
 
 from resources.lib.indexer import CatalogIndexer
+from resources.lib.catalog_api import CatalogApiClient, CatalogApiError
 from resources.lib.store import AtlasStore
 from resources.lib.tmdb import TMDbClient, metadata_key
 from resources.lib.webshare import ResolverError, WebshareResolver
@@ -221,6 +222,14 @@ def fallback_art():
     return os.path.join(ADDON.getAddonInfo("path"), "icon.png")
 
 
+def use_catalog_api():
+    return bool_setting("use_catalog_api", False)
+
+
+def catalog_api():
+    return CatalogApiClient(setting("catalog_api_url", "http://192.168.2.226/api"))
+
+
 def ensure_index(scope="all"):
     if not bool_setting("auto_index", True):
         return
@@ -291,6 +300,9 @@ def add_home_context(item, label, query):
 
 
 def root_menu():
+    if use_catalog_api():
+        api_root_menu()
+        return
     hidden = store().hidden_home_keys()
     add_home_item("quick-search-movies", hidden, "[B]Rýchle hľadanie filmov[/B]", "search", {"media_type": "movie"})
     add_home_item("quick-search-series", hidden, "[B]Rýchle hľadanie seriálov[/B]", "search", {"media_type": "episode"})
@@ -315,6 +327,29 @@ def root_menu():
     add_home_item("history", hidden, "História", "history")
     add_home_item("advanced-filter", hidden, "Filter", "advanced_filter")
     add_home_item("tools", hidden, "Nástroje", "tools")
+    add_command("Nastavenia", "settings")
+    xbmcplugin.endOfDirectory(HANDLE)
+
+
+def api_root_menu():
+    add_command("[B]Rýchle hľadanie filmov[/B]", "api_search", {"category": "movies"})
+    add_command("[B]Rýchle hľadanie seriálov[/B]", "api_search", {"category": "series"})
+    add_command("Vyhľadávanie", "api_search")
+    for label, category in (
+        ("Filmy", "movies"),
+        ("Seriály", "series"),
+        ("Dokumentárne", "documentaries"),
+        ("Koncerty", "concerts"),
+        ("Anime", "anime"),
+        ("Šport", "sports"),
+        ("Detské", "kids"),
+        ("Hudobné videá", "music-videos"),
+        ("Ostatné", "other"),
+        ("Nezaradené", "unknown"),
+    ):
+        add_directory(label, "api_media", {"category": category, "sort": "recent"})
+    add_directory("Obľúbené", "favorites")
+    add_directory("História", "history")
     add_command("Nastavenia", "settings")
     xbmcplugin.endOfDirectory(HANDLE)
 
@@ -589,6 +624,17 @@ def search(params=None):
         list_items(list_params)
 
 
+def api_search(params=None):
+    params = dict(params or {})
+    query = xbmcgui.Dialog().input("Hľadať v katalógu", type=xbmcgui.INPUT_ALPHANUM)
+    if not query:
+        xbmcplugin.endOfDirectory(HANDLE)
+        return
+    store().add_search(query)
+    params["q"] = query
+    api_media(params)
+
+
 def search_ident():
     ident = xbmcgui.Dialog().input("Webshare ident", type=xbmcgui.INPUT_ALPHANUM)
     if not ident:
@@ -791,6 +837,163 @@ def filter_delete(params):
 
 def listing_action(query):
     return "movie_groups" if query.get("media_type") == "movie" else "list"
+
+
+def api_media(params):
+    page = int(params.get("page", "0"))
+    request_params = {
+        "category": params.get("category"),
+        "page": page + 1,
+        "limit": page_size(),
+        "sort": params.get("sort", "recent"),
+        "order": params.get("order", "desc"),
+        "year": params.get("year"),
+        "genre": params.get("genre"),
+        "language": params.get("language"),
+        "quality": params.get("quality"),
+    }
+    try:
+        if params.get("q"):
+            response = catalog_api().search(params["q"], **request_params)
+        else:
+            response = catalog_api().media(**request_params)
+    except CatalogApiError as exc:
+        notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+        return
+
+    for media in response.get("data", []):
+        add_api_media(media)
+    pagination = response.get("pagination") or {}
+    add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media", params, page)
+    xbmcplugin.setContent(HANDLE, "tvshows" if params.get("category") == "series" else "movies")
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def add_api_media(media):
+    title = media.get("title") or "Bez názvu"
+    year = media.get("year")
+    versions = int(media.get("versions") or 0)
+    label_parts = [str(year)] if year else []
+    if media.get("media_type") == "episode":
+        label_parts.append(
+            "S{:02d}E{:02d}".format(
+                int(media.get("season_number") or 0),
+                int(media.get("episode_number") or 0),
+            )
+        )
+    label_parts.append("{} verzií".format(versions))
+    item = xbmcgui.ListItem(label="{} [{}]".format(title, " | ".join(label_parts)))
+    item.setInfo(
+        "video",
+        {
+            "title": title,
+            "originaltitle": media.get("original_title") or "",
+            "plot": media.get("overview") or "",
+            "year": int(year or 0),
+            "genre": ", ".join(
+                [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in media.get("genres") or []]
+            ),
+            "rating": float(media.get("rating") or 0),
+            "mediatype": "tvshow" if media.get("media_type") == "tv" else "movie",
+        },
+    )
+    item.setArt(
+        {
+            "poster": media.get("poster_url") or fallback_art(),
+            "thumb": media.get("poster_url") or fallback_art(),
+            "fanart": media.get("backdrop_url") or fallback_art(),
+        }
+    )
+    xbmcplugin.addDirectoryItem(
+        HANDLE,
+        addon_url({"action": "api_media_detail", "media_id": media.get("id")}),
+        item,
+        isFolder=True,
+    )
+
+
+def api_media_detail(params):
+    media_id = params.get("media_id")
+    page = int(params.get("page", "0"))
+    try:
+        detail = catalog_api().detail(media_id) or {}
+        if detail.get("media_type") == "tv":
+            response = catalog_api().episodes(media_id, page=page + 1, limit=page_size())
+            for episode in response.get("data", []):
+                add_api_media(episode)
+            pagination = response.get("pagination") or {}
+            add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_detail", params, page)
+            xbmcplugin.setContent(HANDLE, "episodes")
+            xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+            return
+        file_response = catalog_api().files(media_id, page=page + 1, limit=page_size())
+        files = file_response.get("data", [])
+    except CatalogApiError as exc:
+        notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+        return
+    meta = {
+        "title": detail.get("title") or "",
+        "original_title": detail.get("original_title") or "",
+        "overview": detail.get("overview") or "",
+        "genres": [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in detail.get("genres") or []],
+        "rating": detail.get("rating") or 0,
+        "runtime": detail.get("runtime_minutes") or 0,
+        "countries": detail.get("countries") or [],
+        "director": detail.get("director") or "",
+        "cast": detail.get("cast") or [],
+        "poster": detail.get("poster_url") or "",
+        "backdrop": detail.get("backdrop_url") or "",
+    }
+    for file_row in files:
+        add_api_file(file_row, detail, meta)
+    pagination = file_response.get("pagination") or {}
+    add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_detail", params, page)
+    xbmcplugin.setContent(HANDLE, "episodes" if detail.get("media_type") == "episode" else "videos")
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def add_api_file(file_row, detail, meta):
+    languages = file_row.get("languages") or []
+    quality = file_row.get("resolution") or "unknown"
+    row = {
+        "ident": file_row.get("ident") or "",
+        "title": detail.get("title") or file_row.get("name") or "",
+        "catalog_title": detail.get("title") or "",
+        "name": file_row.get("name") or "",
+        "size": int(file_row.get("size") or 0),
+        "extension": file_row.get("extension") or "",
+        "mime": "",
+        "media_type": detail.get("media_type") or "movie",
+        "year": detail.get("year"),
+        "quality": quality,
+        "language": "/".join(languages) if languages else "unknown",
+        "audio_type": "dubbed" if file_row.get("has_dubbing") else "unknown",
+        "subtitle_type": "subs" if file_row.get("has_subtitles") else "unknown",
+        "genre": ", ".join(meta.get("genres") or []),
+        "series_title": detail.get("title") if detail.get("media_type") == "episode" else None,
+        "season": detail.get("season_number"),
+        "episode": detail.get("episode_number"),
+        "source": file_row.get("source") or "webshare",
+        "url": "webshare://{}".format(file_row.get("ident") or ""),
+    }
+    title = row["title"]
+    label = "{} | {} | {} | {:.2f} GB".format(
+        quality,
+        row["language"],
+        file_row.get("source") or "Webshare",
+        row["size"] / float(1024 ** 3),
+    )
+    item = xbmcgui.ListItem(label=label)
+    item.setProperty("IsPlayable", "true")
+    set_video_metadata(item, row, meta, title)
+    xbmcplugin.addDirectoryItem(
+        HANDLE,
+        addon_url({"action": "play", "ident": row["ident"], "title": title}),
+        item,
+        isFolder=False,
+    )
 
 
 def movie_groups(params):
@@ -1296,7 +1499,7 @@ def language_label(language):
 def play_video(params):
     ident = params.get("ident", "")
     row = store().get_item(ident)
-    title = row["title"] if row else ident
+    title = row["title"] if row else params.get("title", ident)
 
     resolver = WebshareResolver(
         username=setting("username"),
@@ -1458,6 +1661,9 @@ def router():
         "tools": tools_menu,
         "catalog": catalog_menu,
         "search": lambda: search(params),
+        "api_search": lambda: api_search(params),
+        "api_media": lambda: api_media(params),
+        "api_media_detail": lambda: api_media_detail(params),
         "search_ident": search_ident,
         "recent_searches": recent_searches,
         "advanced_filter": advanced_filter,

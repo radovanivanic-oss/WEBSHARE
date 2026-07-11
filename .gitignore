@@ -1,6 +1,7 @@
 node_modules/
 .env
 runtime/
+data/
 *.log
 *.tmp
 videos_all.json
