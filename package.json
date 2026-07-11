@@ -10,8 +10,9 @@
     "start": "node main.js",
     "check": "node --check main.js",
     "check:publish": "node --check publish-exports.js",
+    "catalog:export": "node main.js --classify-only",
     "publish:github": "node publish-exports.js",
-    "test": "echo \"No tests configured\""
+    "test": "node tests/catalog-classifier.test.js"
   },
   "dependencies": {
     "axios": "^1.12.2",

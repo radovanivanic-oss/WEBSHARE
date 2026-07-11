@@ -62,7 +62,7 @@ async function main() {
   process.env.GITHUB_EXPORT_ENABLED = "true";
 
   const { getConfig, publishExportsToGithub } = require("./main");
-  const config = getConfig();
+  const config = getConfig({ requireCredentials: false });
   const logger = createCliLogger();
 
   logger.info("Spúšťam manuálny GitHub export.", {

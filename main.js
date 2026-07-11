@@ -5,10 +5,13 @@ const fs = require("fs");
 const fsPromises = fs.promises;
 const os = require("os");
 const path = require("path");
-const readline = require("readline");
 const util = require("util");
 const { parseStringPromise } = require("xml2js");
-const zlib = require("zlib");
+const {
+  exportClassifiedCatalog,
+  normalizeBoolean,
+  normalizeChunkSize,
+} = require("./lib/catalog-exporter");
 
 const execFileAsync = util.promisify(execFile);
 
@@ -32,6 +35,7 @@ const CHECKPOINT_SAVE_INTERVAL = 10;
 const PREFIX_CONCURRENCY = 3;
 const FILE_LINK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SEEN_BUCKET_CACHE_LIMIT = 16;
+const GITHUB_MAX_EXPORT_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 const MD5_CRYPT_MAGIC = "$1$";
 const MD5_CRYPT_ALPHABET =
   "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -48,10 +52,13 @@ class WebshareApiError extends Error {
   }
 }
 
-function getConfig() {
+function getConfig(options = {}) {
+  const requireCredentials = options.requireCredentials !== false;
   const username = process.env.WEBSHARE_USERNAME;
   const password = process.env.WEBSHARE_PASSWORD;
   const outputPath = process.env.OUTPUT_JSON_PATH || DEFAULT_OUTPUT_PATH;
+  const catalogChunkSize = normalizeChunkSize(process.env.CATALOG_CHUNK_SIZE);
+  const exportLegacyAll = normalizeBoolean(process.env.EXPORT_LEGACY_ALL, true);
   const githubExportEnabled = process.env.GITHUB_EXPORT_ENABLED === "true";
   const githubExportBranch = process.env.GITHUB_EXPORT_BRANCH || "data";
   const githubExportRepoUrl = process.env.GITHUB_EXPORT_REPO_URL || null;
@@ -61,7 +68,7 @@ function getConfig() {
   const githubExportEmail =
     process.env.GITHUB_EXPORT_EMAIL || "webshare-crawler@example.invalid";
 
-  if (!username || !password) {
+  if (requireCredentials && (!username || !password)) {
     throw new Error("Chýba WEBSHARE_USERNAME alebo WEBSHARE_PASSWORD.");
   }
 
@@ -71,6 +78,9 @@ function getConfig() {
     username,
     password,
     outputPath,
+    catalogOutputDir: path.join(path.dirname(outputPath), "catalog"),
+    catalogChunkSize,
+    exportLegacyAll,
     minSize: MIN_VIDEO_SIZE,
     maxSize: MAX_VIDEO_SIZE,
     runtimeDir,
@@ -349,6 +359,77 @@ async function copyFile(sourcePath, targetPath) {
   await fsPromises.copyFile(sourcePath, targetPath);
 }
 
+async function copyFileForGithub(sourcePath, targetPath, logger, publishStats) {
+  try {
+    const stat = await fsPromises.stat(sourcePath);
+
+    if (stat.size > GITHUB_MAX_EXPORT_FILE_SIZE_BYTES) {
+      logger.warn("Súbor presahuje GitHub limit a nebude publikovaný.", {
+        sourcePath,
+        size: stat.size,
+        limit: GITHUB_MAX_EXPORT_FILE_SIZE_BYTES,
+      });
+      publishStats.skippedFiles.push({
+        file: sourcePath,
+        size: stat.size,
+        reason: "github_file_size_limit",
+      });
+      return false;
+    }
+
+    if (stat.size > 50 * 1024 * 1024) {
+      logger.warn("Súbor je veľký pre GitHub, ale je pod tvrdým limitom.", {
+        sourcePath,
+        size: stat.size,
+      });
+    }
+
+    await copyFile(sourcePath, targetPath);
+    publishStats.copiedFiles += 1;
+    publishStats.copiedBytes += stat.size;
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      logger.warn("Súbor na GitHub publish neexistuje, preskakujem.", {
+        sourcePath,
+      });
+      publishStats.skippedFiles.push({
+        file: sourcePath,
+        size: 0,
+        reason: "missing",
+      });
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+async function copyDirectoryForGithub(sourceDir, targetDir, logger, publishStats) {
+  if (!(await pathExists(sourceDir))) {
+    logger.warn("Adresár na GitHub publish neexistuje, preskakujem.", {
+      sourceDir,
+    });
+    return false;
+  }
+
+  await fsPromises.mkdir(targetDir, { recursive: true });
+  const entries = await fsPromises.readdir(sourceDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+
+    if (entry.isDirectory()) {
+      await copyDirectoryForGithub(sourcePath, targetPath, logger, publishStats);
+    } else if (entry.isFile()) {
+      await copyFileForGithub(sourcePath, targetPath, logger, publishStats);
+    }
+  }
+
+  return true;
+}
+
 async function pathExists(targetPath) {
   try {
     await fsPromises.access(targetPath);
@@ -364,39 +445,6 @@ async function removePathIfExists(targetPath) {
 
 async function runGitCommand(args, options = {}) {
   await execFileAsync("git", args, options);
-}
-
-async function writeToStream(stream, chunk) {
-  await new Promise((resolve, reject) => {
-    const onError = (error) => {
-      cleanup();
-      reject(error);
-    };
-    const onDrain = () => {
-      cleanup();
-      resolve();
-    };
-    const cleanup = () => {
-      stream.off("error", onError);
-      stream.off("drain", onDrain);
-    };
-
-    stream.on("error", onError);
-
-    if (stream.write(chunk)) {
-      cleanup();
-      resolve();
-    } else {
-      stream.on("drain", onDrain);
-    }
-  });
-}
-
-async function closeWritableStream(stream) {
-  await new Promise((resolve, reject) => {
-    stream.on("error", reject);
-    stream.end(resolve);
-  });
 }
 
 class CatalogStore {
@@ -614,25 +662,32 @@ async function releaseLock(lockPath, logger) {
   }
 }
 
-function isValidFinalItem(item) {
-  return Boolean(
-    item &&
-      item.id &&
-      item.name &&
-      Number.isFinite(item.size) &&
-      item.size > 0 &&
-      (item.url || item.direct_url)
-  );
-}
-
-function buildHealthReport({ success, videos, durationSeconds }) {
-  return {
+function buildHealthReport({
+  success,
+  videos,
+  durationSeconds,
+  phase = success ? "done" : "failed",
+  catalog = null,
+  classification = null,
+}) {
+  const report = {
     success,
+    phase,
     generated_at: new Date().toISOString(),
     videos,
     duration_seconds: durationSeconds,
     memory: getMemoryUsage(),
   };
+
+  if (catalog) {
+    report.catalog = catalog;
+  }
+
+  if (classification) {
+    report.classification = classification;
+  }
+
+  return report;
 }
 
 function toMd5CryptBase64(value, length) {
@@ -1244,66 +1299,6 @@ async function crawlPrefixes(
   await saveCheckpointQueued(state);
 }
 
-async function streamCatalogToOutput(catalogJsonlPath, outputPath, stats) {
-  const jsonTempPath = `${outputPath}.tmp`;
-  const gzipOutputPath = `${outputPath}.gz`;
-  const gzipTempPath = `${gzipOutputPath}.tmp`;
-
-  await ensureDirectory(outputPath);
-  await ensureDirectory(gzipOutputPath);
-
-  const jsonStream = fs.createWriteStream(jsonTempPath, { encoding: "utf8" });
-  const gzipStream = zlib.createGzip();
-  const gzipFileStream = fs.createWriteStream(gzipTempPath);
-  gzipStream.pipe(gzipFileStream);
-
-  const input = readline.createInterface({
-    input: fs.createReadStream(catalogJsonlPath, { encoding: "utf8" }),
-    crlfDelay: Infinity,
-  });
-
-  let validCount = 0;
-
-  await writeToStream(jsonStream, "[\n");
-  await writeToStream(gzipStream, "[\n");
-
-  for await (const line of input) {
-    if (!line.trim()) {
-      continue;
-    }
-
-    let item;
-    try {
-      item = JSON.parse(line);
-    } catch (error) {
-      stats.invalidItems += 1;
-      continue;
-    }
-
-    if (!isValidFinalItem(item)) {
-      stats.invalidItems += 1;
-      continue;
-    }
-
-    const prefix = validCount === 0 ? "  " : ",\n  ";
-    const chunk = `${prefix}${JSON.stringify(item)}`;
-    await writeToStream(jsonStream, chunk);
-    await writeToStream(gzipStream, chunk);
-    validCount += 1;
-  }
-
-  await writeToStream(jsonStream, "\n]\n");
-  await writeToStream(gzipStream, "\n]\n");
-  await closeWritableStream(jsonStream);
-  await closeWritableStream(gzipStream);
-  await closeWritableStream(gzipFileStream);
-
-  await fsPromises.rename(jsonTempPath, outputPath);
-  await fsPromises.rename(gzipTempPath, gzipOutputPath);
-
-  return validCount;
-}
-
 async function prepareRuntime(config) {
   await fsPromises.mkdir(config.runtimeDir, { recursive: true });
   await ensureDirectory(config.outputPath);
@@ -1373,6 +1368,11 @@ async function publishExportsToGithub(config, logger) {
     path.join(os.tmpdir(), "webshare-export-")
   );
   const exportDir = path.join(tempRoot, "repo");
+  const publishStats = {
+    copiedFiles: 0,
+    copiedBytes: 0,
+    skippedFiles: [],
+  };
 
   try {
     await fsPromises.mkdir(exportDir, { recursive: true });
@@ -1386,17 +1386,29 @@ async function publishExportsToGithub(config, logger) {
       cwd: exportDir,
     });
 
-    await copyFile(
+    await copyFileForGithub(
       config.outputPath,
-      path.join(exportDir, path.basename(config.outputPath))
+      path.join(exportDir, path.basename(config.outputPath)),
+      logger,
+      publishStats
     );
-    await copyFile(
+    await copyFileForGithub(
       `${config.outputPath}.gz`,
-      path.join(exportDir, `${path.basename(config.outputPath)}.gz`)
+      path.join(exportDir, `${path.basename(config.outputPath)}.gz`),
+      logger,
+      publishStats
     );
-    await copyFile(
+    await copyFileForGithub(
       config.healthPath,
-      path.join(exportDir, path.basename(config.healthPath))
+      path.join(exportDir, path.basename(config.healthPath)),
+      logger,
+      publishStats
+    );
+    await copyDirectoryForGithub(
+      config.catalogOutputDir,
+      path.join(exportDir, "catalog"),
+      logger,
+      publishStats
     );
     await fsPromises.writeFile(path.join(exportDir, ".nojekyll"), "", "utf8");
 
@@ -1420,18 +1432,45 @@ async function publishExportsToGithub(config, logger) {
     logger.info("GitHub export branch bola úspešne aktualizovaná.", {
       branch: config.githubExportBranch,
       repoUrl,
+      copiedFiles: publishStats.copiedFiles,
+      copiedBytes: publishStats.copiedBytes,
+      skippedFiles: publishStats.skippedFiles,
     });
 
     return {
       branch: config.githubExportBranch,
       repoUrl,
+      copiedFiles: publishStats.copiedFiles,
+      copiedBytes: publishStats.copiedBytes,
+      skippedFiles: publishStats.skippedFiles,
     };
   } finally {
     await removePathIfExists(tempRoot);
   }
 }
 
-function buildSummary(stats, finalCount) {
+function buildClassificationSummary(exportResult) {
+  const counts = exportResult?.categoryCounts || {};
+
+  return {
+    total: exportResult?.total || 0,
+    movies: counts.movies || 0,
+    series: counts.series || 0,
+    documentaries: counts.documentaries || 0,
+    concerts: counts.concerts || 0,
+    sports: counts.sports || 0,
+    kids: counts.kids || 0,
+    musicVideos: counts["music-videos"] || 0,
+    other: counts.other || 0,
+    unknown: counts.unknown || 0,
+    chunksCreated: exportResult?.chunksCreated || 0,
+    invalidJsonLines: exportResult?.invalidJsonLines || 0,
+    invalidItems: exportResult?.invalidItems || 0,
+    durationSeconds: exportResult?.durationSeconds || 0,
+  };
+}
+
+function buildSummary(stats, finalCount, exportResult = null) {
   return {
     found_videos: stats.foundVideos,
     videos_after_size_validation: stats.filteredVideos,
@@ -1443,8 +1482,47 @@ function buildSummary(stats, finalCount) {
     api_requests: stats.apiRequests,
     duration_seconds: getDurationSeconds(stats),
     final_videos: finalCount,
+    catalog: exportResult
+      ? {
+          manifestPath: exportResult.manifestPath,
+          chunkSize: exportResult.chunkSize,
+          exportLegacyAll: exportResult.exportLegacyAll,
+        }
+      : null,
+    classification: exportResult ? buildClassificationSummary(exportResult) : null,
     memory: getMemoryUsage(),
   };
+}
+
+async function runCatalogExport(config, logger, stats) {
+  logger.info("Začínam lokálnu klasifikáciu a chunkovaný export katalógu.", {
+    catalogJsonlPath: config.catalogJsonlPath,
+    catalogOutputDir: config.catalogOutputDir,
+    outputPath: config.outputPath,
+    chunkSize: config.catalogChunkSize,
+    exportLegacyAll: config.exportLegacyAll,
+    memory: getMemoryUsage(),
+  });
+
+  const exportResult = await exportClassifiedCatalog({
+    catalogJsonlPath: config.catalogJsonlPath,
+    outputPath: config.outputPath,
+    chunkSize: config.catalogChunkSize,
+    exportLegacyAll: config.exportLegacyAll,
+    logger,
+    getMemoryUsage,
+  });
+
+  stats.invalidItems += exportResult.invalidItems + exportResult.invalidJsonLines;
+
+  logger.info("Klasifikovaný katalóg bol úspešne exportovaný.", {
+    phase: "done",
+    ...buildClassificationSummary(exportResult),
+    manifestPath: exportResult.manifestPath,
+    memory: getMemoryUsage(),
+  });
+
+  return exportResult;
 }
 
 async function crawlAllVideos(config, logger, stats) {
@@ -1474,11 +1552,17 @@ async function crawlAllVideos(config, logger, stats) {
   }
 
   logger.info("Začínam finalize fázu zo streamovaného JSONL katalógu.");
-  const finalCount = await streamCatalogToOutput(
-    config.catalogJsonlPath,
-    config.outputPath,
-    stats
+  await writeHealthReport(
+    config,
+    buildHealthReport({
+      success: null,
+      videos: state.uniqueItems || stats.uniqueItems,
+      durationSeconds: getDurationSeconds(stats),
+      phase: "classify",
+    })
   );
+  const exportResult = await runCatalogExport(config, logger, stats);
+  const finalCount = exportResult.total;
 
   await writeHealthReport(
     config,
@@ -1486,6 +1570,13 @@ async function crawlAllVideos(config, logger, stats) {
       success: true,
       videos: finalCount,
       durationSeconds: getDurationSeconds(stats),
+      phase: "done",
+      catalog: {
+        manifestPath: exportResult.manifestPath,
+        chunkSize: exportResult.chunkSize,
+        exportLegacyAll: exportResult.exportLegacyAll,
+      },
+      classification: buildClassificationSummary(exportResult),
     })
   );
   const githubExport = await publishExportsToGithub(config, logger);
@@ -1495,10 +1586,62 @@ async function crawlAllVideos(config, logger, stats) {
   return {
     count: finalCount,
     outputPath: config.outputPath,
+    catalogManifestPath: exportResult.manifestPath,
     logPath: config.logPath,
     healthPath: config.healthPath,
     githubExport,
-    summary: buildSummary(stats, finalCount),
+    summary: buildSummary(stats, finalCount, exportResult),
+  };
+}
+
+async function exportExistingCatalogOnly(config, logger, stats) {
+  await prepareRuntime(config);
+
+  if (!(await pathExists(config.catalogJsonlPath))) {
+    throw new Error(
+      `Chýba ${config.catalogJsonlPath}. Klasifikáciu bez crawlu možno spustiť iba nad existujúcim catalog-items.jsonl.`
+    );
+  }
+
+  await writeHealthReport(
+    config,
+    buildHealthReport({
+      success: null,
+      videos: 0,
+      durationSeconds: getDurationSeconds(stats),
+      phase: "classify",
+    })
+  );
+
+  const exportResult = await runCatalogExport(config, logger, stats);
+  const finalCount = exportResult.total;
+
+  await writeHealthReport(
+    config,
+    buildHealthReport({
+      success: true,
+      videos: finalCount,
+      durationSeconds: getDurationSeconds(stats),
+      phase: "done",
+      catalog: {
+        manifestPath: exportResult.manifestPath,
+        chunkSize: exportResult.chunkSize,
+        exportLegacyAll: exportResult.exportLegacyAll,
+      },
+      classification: buildClassificationSummary(exportResult),
+    })
+  );
+
+  const githubExport = await publishExportsToGithub(config, logger);
+
+  return {
+    count: finalCount,
+    outputPath: config.outputPath,
+    catalogManifestPath: exportResult.manifestPath,
+    logPath: config.logPath,
+    healthPath: config.healthPath,
+    githubExport,
+    summary: buildSummary(stats, finalCount, exportResult),
   };
 }
 
@@ -1542,7 +1685,8 @@ function createWebshareResolver(options = {}) {
 }
 
 async function main() {
-  const config = getConfig();
+  const classifyOnly = process.argv.includes("--classify-only");
+  const config = getConfig({ requireCredentials: !classifyOnly });
   await prepareRuntime(config);
   const logger = createLogger(config.logPath);
   const stats = createRunStats();
@@ -1558,9 +1702,15 @@ async function main() {
       healthPath: config.healthPath,
       catalogJsonlPath: config.catalogJsonlPath,
       seenIndexDir: config.seenIndexDir,
+      catalogOutputDir: config.catalogOutputDir,
+      catalogChunkSize: config.catalogChunkSize,
+      exportLegacyAll: config.exportLegacyAll,
+      mode: classifyOnly ? "classify-only" : "crawl",
     });
 
-    const result = await crawlAllVideos(config, logger, stats);
+    const result = classifyOnly
+      ? await exportExistingCatalogOnly(config, logger, stats)
+      : await crawlAllVideos(config, logger, stats);
     logger.info("Hotovo.", result);
     logger.info("Štatistiky behu.", result.summary);
   } catch (error) {
