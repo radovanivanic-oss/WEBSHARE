@@ -29,6 +29,18 @@ DEFAULT_MOVIE_CATALOG_URL = CATALOG_BASE_URL + "/videos_movies.json.gz"
 DEFAULT_MOVIE_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_movies.json"
 DEFAULT_SERIES_CATALOG_URL = CATALOG_BASE_URL + "/videos_series.json.gz"
 DEFAULT_SERIES_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_series.json"
+DEFAULT_DOCUMENTARY_CATALOG_URL = CATALOG_BASE_URL + "/videos_documentary.json.gz"
+DEFAULT_DOCUMENTARY_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_documentary.json"
+DEFAULT_SPORT_CATALOG_URL = CATALOG_BASE_URL + "/videos_sport.json.gz"
+DEFAULT_SPORT_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_sport.json"
+DEFAULT_KIDS_CATALOG_URL = CATALOG_BASE_URL + "/videos_kids.json.gz"
+DEFAULT_KIDS_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_kids.json"
+DEFAULT_ANIME_CATALOG_URL = CATALOG_BASE_URL + "/videos_anime.json.gz"
+DEFAULT_ANIME_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_anime.json"
+DEFAULT_MUSIC_CATALOG_URL = CATALOG_BASE_URL + "/videos_music.json.gz"
+DEFAULT_MUSIC_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_music.json"
+DEFAULT_OTHER_CATALOG_URL = CATALOG_BASE_URL + "/videos_other.json.gz"
+DEFAULT_OTHER_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_other.json"
 OLD_CATALOG_URL = "http://192.168.2.226/videos_all.json.gz"
 OLD_FALLBACK_CATALOG_URL = "http://192.168.2.226/videos_all.json"
 
@@ -57,7 +69,58 @@ CATALOG_SCOPES = {
         "fallback_default": DEFAULT_SERIES_FALLBACK_CATALOG_URL,
         "media_type": "episode",
     },
+    "documentary": {
+        "label": "Dokumenty",
+        "primary_setting": "documentary_catalog_url",
+        "fallback_setting": "documentary_fallback_catalog_url",
+        "primary_default": DEFAULT_DOCUMENTARY_CATALOG_URL,
+        "fallback_default": DEFAULT_DOCUMENTARY_FALLBACK_CATALOG_URL,
+        "media_type": None,
+    },
+    "sport": {
+        "label": "Šport",
+        "primary_setting": "sport_catalog_url",
+        "fallback_setting": "sport_fallback_catalog_url",
+        "primary_default": DEFAULT_SPORT_CATALOG_URL,
+        "fallback_default": DEFAULT_SPORT_FALLBACK_CATALOG_URL,
+        "media_type": None,
+    },
+    "kids": {
+        "label": "Detské",
+        "primary_setting": "kids_catalog_url",
+        "fallback_setting": "kids_fallback_catalog_url",
+        "primary_default": DEFAULT_KIDS_CATALOG_URL,
+        "fallback_default": DEFAULT_KIDS_FALLBACK_CATALOG_URL,
+        "media_type": None,
+    },
+    "anime": {
+        "label": "Anime",
+        "primary_setting": "anime_catalog_url",
+        "fallback_setting": "anime_fallback_catalog_url",
+        "primary_default": DEFAULT_ANIME_CATALOG_URL,
+        "fallback_default": DEFAULT_ANIME_FALLBACK_CATALOG_URL,
+        "media_type": None,
+    },
+    "music": {
+        "label": "Hudba",
+        "primary_setting": "music_catalog_url",
+        "fallback_setting": "music_fallback_catalog_url",
+        "primary_default": DEFAULT_MUSIC_CATALOG_URL,
+        "fallback_default": DEFAULT_MUSIC_FALLBACK_CATALOG_URL,
+        "media_type": None,
+    },
+    "other": {
+        "label": "Ostatné",
+        "primary_setting": "other_catalog_url",
+        "fallback_setting": "other_fallback_catalog_url",
+        "primary_default": DEFAULT_OTHER_CATALOG_URL,
+        "fallback_default": DEFAULT_OTHER_FALLBACK_CATALOG_URL,
+        "media_type": None,
+    },
 }
+
+VIDEO_TYPE_SCOPES = ("documentary", "sport", "kids", "anime", "music", "other")
+VISIBLE_VIDEO_TYPE_SCOPES = ("documentary", "sport", "kids", "anime", "music")
 
 
 def setting(key, default=""):
@@ -236,6 +299,11 @@ def root_menu():
 
     add_home_item("movies", hidden, "Filmy", "movies")
     add_home_item("series", hidden, "Seriály", "series")
+    add_home_item("documentary", hidden, "Dokumenty", "video_type", {"catalog_scope": "documentary"})
+    add_home_item("sport", hidden, "Šport", "video_type", {"catalog_scope": "sport"})
+    add_home_item("kids", hidden, "Detské", "video_type", {"catalog_scope": "kids"})
+    add_home_item("anime", hidden, "Anime", "video_type", {"catalog_scope": "anime"})
+    add_home_item("music", hidden, "Hudba", "video_type", {"catalog_scope": "music"})
     add_home_item("news", hidden, "Novinky", "news")
     add_home_item("latest", hidden, "Najnovšie", "latest")
     add_home_item("genres", hidden, "Žánre", "genres")
@@ -337,9 +405,32 @@ def series_menu():
     xbmcplugin.endOfDirectory(HANDLE)
 
 
+def video_type_menu(params):
+    scope = params.get("catalog_scope", "all")
+    if scope not in CATALOG_SCOPES:
+        scope = "all"
+    query = {"catalog_scope": scope, "preset": "recent"}
+    add_directory("Najnovšie", "list", query)
+    add_directory("Všetko", "list", {"catalog_scope": scope, "preset": "recent"})
+    add_command("Hľadať", "search", {"catalog_scope": scope})
+    add_directory("Kvalita", "quality", {"catalog_scope": scope})
+    add_directory("Roky", "years", {"catalog_scope": scope})
+    add_directory("Dabing / titulky", "audio_subtitles", {"catalog_scope": scope})
+    add_directory("4K / UHD", "list", {"catalog_scope": scope, "quality": "2160p", "preset": "recent"})
+    add_directory("1080p", "list", {"catalog_scope": scope, "quality": "1080p", "preset": "recent"})
+    add_directory("CZ / SK", "list", {"catalog_scope": scope, "language": "CZ/SK", "preset": "recent"})
+    xbmcplugin.endOfDirectory(HANDLE)
+
+
 def news_menu():
     add_directory("Nové filmy", "movie_groups", {"preset": "recent"})
     add_directory("Nové epizódy", "list", {"media_type": "episode", "preset": "recent"})
+    for scope in VISIBLE_VIDEO_TYPE_SCOPES:
+        add_directory(
+            "Nové {}".format(catalog_scope_config(scope)["label"].lower()),
+            "list",
+            {"catalog_scope": scope, "preset": "recent"},
+        )
     add_directory("Nové 4K / UHD", "list", {"quality": "2160p", "preset": "recent"})
     add_directory("Nové CZ/SK", "list", {"language": "CZ/SK", "preset": "recent"})
     xbmcplugin.endOfDirectory(HANDLE)
@@ -349,6 +440,8 @@ def latest_menu():
     add_directory("Všetko", "list", {"preset": "recent"})
     add_directory("Filmy", "movie_groups", {"preset": "recent"})
     add_directory("Seriály", "list", {"media_type": "episode", "preset": "recent"})
+    for scope in VISIBLE_VIDEO_TYPE_SCOPES:
+        add_directory(catalog_scope_config(scope)["label"], "list", {"catalog_scope": scope, "preset": "recent"})
     add_directory("1080p", "list", {"quality": "1080p", "preset": "recent"})
     add_directory("4K / UHD", "list", {"quality": "2160p", "preset": "recent"})
     xbmcplugin.endOfDirectory(HANDLE)
@@ -440,6 +533,8 @@ def tools_menu():
     add_command("Preindexovať aktívny katalóg", "reindex")
     add_command("Preindexovať filmy", "reindex", {"catalog_scope": "movie"})
     add_command("Preindexovať seriály", "reindex", {"catalog_scope": "series"})
+    for scope in VISIBLE_VIDEO_TYPE_SCOPES:
+        add_command("Preindexovať {}".format(catalog_scope_config(scope)["label"].lower()), "reindex", {"catalog_scope": scope})
     add_command("Preindexovať všetko", "reindex", {"catalog_scope": "all"})
     add_command("Vymazať lokálny index", "clear_index")
     add_command("Vymazať cache metadát", "clear_metadata_cache")
@@ -486,6 +581,8 @@ def search(params=None):
     list_params = {"q": query}
     if params.get("media_type"):
         list_params["media_type"] = params["media_type"]
+    if params.get("catalog_scope"):
+        list_params["catalog_scope"] = params["catalog_scope"]
     if list_params.get("media_type") == "movie":
         movie_groups(list_params)
     else:
@@ -515,13 +612,22 @@ def advanced_filter():
         ("Všetko", None),
         ("Filmy", "movie"),
         ("Seriály", "episode"),
+        ("Dokumenty", "documentary"),
+        ("Šport", "sport"),
+        ("Detské", "kids"),
+        ("Anime", "anime"),
+        ("Hudba", "music"),
+        ("Ostatné", "other"),
     ]
     selected = dialog.select("Typ obsahu", [item[0] for item in type_options])
     if selected == -1:
         xbmcplugin.endOfDirectory(HANDLE)
         return
-    if type_options[selected][1]:
-        params["media_type"] = type_options[selected][1]
+    selected_type = type_options[selected][1]
+    if selected_type in ("movie", "episode"):
+        params["media_type"] = selected_type
+    elif selected_type:
+        params["catalog_scope"] = selected_type
 
     quality_options = [
         ("Všetky kvality", None),
@@ -1341,6 +1447,7 @@ def router():
         "quick": quick_menu,
         "movies": movies_menu,
         "series": series_menu,
+        "video_type": lambda: video_type_menu(params),
         "news": news_menu,
         "latest": latest_menu,
         "genres": genres_menu,

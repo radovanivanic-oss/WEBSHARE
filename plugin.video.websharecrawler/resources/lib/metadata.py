@@ -6,7 +6,9 @@ import os
 import re
 
 
-VIDEO_EXTENSIONS = set(("mp4", "mkv", "avi", "mov", "wmv", "m4v", "webm"))
+VIDEO_EXTENSIONS = set(
+    ("mp4", "mkv", "avi", "mov", "wmv", "m4v", "webm", "vob", "ts", "m2ts", "mpg", "mpeg", "flv")
+)
 EPISODE_PATTERNS = (
     re.compile(r"\bS(?P<season>\d{1,2})E(?P<episode>\d{1,3})\b", re.I),
     re.compile(r"\b(?P<season>\d{1,2})x(?P<episode>\d{1,3})\b", re.I),
