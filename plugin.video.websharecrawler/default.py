@@ -1418,6 +1418,50 @@ def set_video_metadata(item, row, meta, title):
     item.setProperty("AspectRatio", aspect_ratio_from_name(row["name"]))
 
 
+def safe_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        for key in ("name", "title", "original_name", "original_title"):
+            if value.get(key):
+                return str(value.get(key))
+        return ""
+    if isinstance(value, (list, tuple)):
+        return " / ".join([part for part in safe_text_list(value) if part])
+    return str(value)
+
+
+def safe_text_list(value):
+    if not value:
+        return []
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.split(",")]
+        return [part for part in parts if part]
+    if not isinstance(value, (list, tuple)):
+        text = safe_text(value)
+        return [text] if text else []
+    result = []
+    for item in value:
+        text = safe_text(item).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def safe_int(value, default=0):
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def safe_float(value, default=0.0):
+    try:
+        return float(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
 def decorate_label(row):
     parts = [row["title"] or row["name"] or row["ident"]]
     meta = []
@@ -1438,21 +1482,24 @@ def build_video_info(row, meta, title):
         plot = meta.get("overview") or "Popis filmu nie je dostupný."
     else:
         plot = meta.get("overview") or technical_plot(row)
-    genres = meta.get("genres") or []
-    countries = meta.get("countries") or []
-    runtime = int(meta.get("runtime") or 0)
+    plot = safe_text(plot)
+    genres = safe_text_list(meta.get("genres"))
+    countries = safe_text_list(meta.get("countries"))
+    cast = safe_text_list(meta.get("cast"))
+    runtime = safe_int(meta.get("runtime"))
+    fallback_genre = safe_text(row["genre"]) if row["genre"] != "unknown" else ""
     info = {
-        "title": title,
-        "originaltitle": meta.get("original_title") or row["name"] or title,
-        "year": int(meta.get("year") or row["year"] or 0),
+        "title": safe_text(title),
+        "originaltitle": safe_text(meta.get("original_title") or row["name"] or title),
+        "year": safe_int(meta.get("year") or row["year"]),
         "plot": plot if bool_setting("show_descriptions", True) else "",
         "plotoutline": plot if bool_setting("show_descriptions", True) else "",
-        "genre": " / ".join(genres) if genres else (row["genre"] if row["genre"] != "unknown" else ""),
-        "rating": float(meta.get("rating") or 0),
+        "genre": " / ".join(genres) if genres else fallback_genre,
+        "rating": safe_float(meta.get("rating")),
         "duration": runtime * 60 if runtime else 0,
         "country": " / ".join(countries),
-        "director": meta.get("director") or "",
-        "cast": meta.get("cast") or [],
+        "director": safe_text(meta.get("director")),
+        "cast": cast,
         "mediatype": "episode" if row["media_type"] == "episode" else "movie",
     }
     return info
