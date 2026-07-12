@@ -335,8 +335,8 @@ def api_root_menu():
     add_command("[B]Rýchle hľadanie filmov[/B]", "api_search", {"category": "movies"})
     add_command("[B]Rýchle hľadanie seriálov[/B]", "api_search", {"category": "series"})
     add_command("Vyhľadávanie", "api_search")
+    add_directory("Filmy", "api_movies")
     for label, category in (
-        ("Filmy", "movies"),
         ("Seriály", "series"),
         ("Dokumentárne", "documentaries"),
         ("Koncerty", "concerts"),
@@ -351,6 +351,14 @@ def api_root_menu():
     add_directory("Obľúbené", "favorites")
     add_directory("História", "history")
     add_command("Nastavenia", "settings")
+    xbmcplugin.endOfDirectory(HANDLE)
+
+
+def api_movies_menu():
+    add_directory("Novinky", "api_media", {"category": "movies", "sort": "release_date_desc"})
+    add_directory("Všetky filmy", "api_media", {"category": "movies", "sort": "title", "order": "asc"})
+    add_directory("Najlepšie hodnotené", "api_media", {"category": "movies", "sort": "rating", "order": "desc"})
+    add_command("Hľadať film", "api_search", {"category": "movies"})
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -884,19 +892,22 @@ def add_api_media(media):
         )
     label_parts.append("{} verzií".format(versions))
     item = xbmcgui.ListItem(label="{} [{}]".format(title, " | ".join(label_parts)))
+    info = {
+        "title": title,
+        "originaltitle": media.get("original_title") or "",
+        "plot": media.get("overview") or "",
+        "year": int(year or 0),
+        "genre": ", ".join(
+            [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in media.get("genres") or []]
+        ),
+        "rating": float(media.get("rating") or 0),
+        "mediatype": "tvshow" if media.get("media_type") == "tv" else "movie",
+    }
+    if media.get("release_date"):
+        info["premiered"] = media["release_date"]
     item.setInfo(
         "video",
-        {
-            "title": title,
-            "originaltitle": media.get("original_title") or "",
-            "plot": media.get("overview") or "",
-            "year": int(year or 0),
-            "genre": ", ".join(
-                [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in media.get("genres") or []]
-            ),
-            "rating": float(media.get("rating") or 0),
-            "mediatype": "tvshow" if media.get("media_type") == "tv" else "movie",
-        },
+        info,
     )
     item.setArt(
         {
@@ -933,18 +944,23 @@ def api_media_detail(params):
         notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
+    live_metadata = {}
+    try:
+        live_metadata = catalog_api().metadata(media_id) or {}
+    except CatalogApiError:
+        live_metadata = {}
     meta = {
         "title": detail.get("title") or "",
         "original_title": detail.get("original_title") or "",
-        "overview": detail.get("overview") or "",
-        "genres": [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in detail.get("genres") or []],
-        "rating": detail.get("rating") or 0,
-        "runtime": detail.get("runtime_minutes") or 0,
+        "overview": live_metadata.get("overview") or detail.get("overview") or "",
+        "genres": live_metadata.get("genres") or [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in detail.get("genres") or []],
+        "rating": live_metadata.get("rating") or detail.get("rating") or 0,
+        "runtime": live_metadata.get("runtimeMinutes") or detail.get("runtime_minutes") or 0,
         "countries": detail.get("countries") or [],
         "director": detail.get("director") or "",
         "cast": detail.get("cast") or [],
-        "poster": detail.get("poster_url") or "",
-        "backdrop": detail.get("backdrop_url") or "",
+        "poster": live_metadata.get("posterUrl") or detail.get("poster_url") or "",
+        "backdrop": live_metadata.get("backdropUrl") or detail.get("backdrop_url") or "",
     }
     for file_row in files:
         add_api_file(file_row, detail, meta)
@@ -952,6 +968,30 @@ def api_media_detail(params):
     add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_detail", params, page)
     xbmcplugin.setContent(HANDLE, "episodes" if detail.get("media_type") == "episode" else "videos")
     xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def api_file_label(file_row):
+    languages = [str(value).upper() for value in file_row.get("languages") or []]
+    parts = [file_row.get("resolution") or "Neznáma kvalita"]
+    if file_row.get("dolby_vision"):
+        parts.append("Dolby Vision")
+    if file_row.get("hdr"):
+        parts.append("HDR")
+    if file_row.get("source"):
+        parts.append(str(file_row["source"]))
+    if file_row.get("video_codec"):
+        parts.append(str(file_row["video_codec"]).upper())
+    if file_row.get("audio_codec"):
+        parts.append(str(file_row["audio_codec"]).upper())
+    if languages:
+        parts.append(" + ".join(languages))
+    if file_row.get("has_dubbing"):
+        dubbing_language = "CZ/SK" if "CZ" in languages and "SK" in languages else "CZ" if "CZ" in languages else "SK" if "SK" in languages else ""
+        parts.append("{} dabing".format(dubbing_language).strip())
+    if file_row.get("has_subtitles"):
+        subtitle_language = "CZ/SK" if "CZ" in languages and "SK" in languages else "CZ" if "CZ" in languages else "SK" if "SK" in languages else ""
+        parts.append("{} titulky".format(subtitle_language).strip())
+    return " • ".join(parts)
 
 
 def add_api_file(file_row, detail, meta):
@@ -979,21 +1019,33 @@ def add_api_file(file_row, detail, meta):
         "url": "webshare://{}".format(file_row.get("ident") or ""),
     }
     title = row["title"]
-    label = "{} | {} | {} | {:.2f} GB".format(
-        quality,
-        row["language"],
-        file_row.get("source") or "Webshare",
-        row["size"] / float(1024 ** 3),
-    )
-    item = xbmcgui.ListItem(label=label)
+    size_label = "{:.2f} GB".format(row["size"] / float(1024 ** 3))
+    item = xbmcgui.ListItem(label=api_file_label(file_row), label2=size_label)
     item.setProperty("IsPlayable", "true")
     set_video_metadata(item, row, meta, title)
+    item.setProperty("VideoCodec", str(file_row.get("video_codec") or "").lower())
+    item.setProperty("VideoResolution", resolution_from_quality(quality))
+    item.setProperty("AudioLanguage", "/".join(languages))
+    item.setProperty("WebshareOriginalName", row["name"])
+    item.setProperty("FileSize", size_label)
+    item.addContextMenuItems(
+        [
+            (
+                "Pôvodný názov súboru",
+                "RunPlugin({})".format(addon_url({"action": "show_file_name", "name": row["name"]})),
+            )
+        ]
+    )
     xbmcplugin.addDirectoryItem(
         HANDLE,
         addon_url({"action": "play", "ident": row["ident"], "title": title}),
         item,
         isFolder=False,
     )
+
+
+def show_file_name(params):
+    xbmcgui.Dialog().textviewer("Pôvodný názov súboru", params.get("name") or "Názov nie je k dispozícii.")
 
 
 def movie_groups(params):
@@ -1073,7 +1125,7 @@ def load_group_metadata(rows):
     missing = [row for row in rows if movie_group_cache_key(row) not in cached]
 
     client = TMDbClient(
-        api_key=setting("tmdb_api_key"),
+        api_key="",
         language=metadata_language(),
         fallback_language=metadata_fallback_language(),
         second_fallback_language=metadata_second_fallback_language(),
@@ -1269,7 +1321,7 @@ def load_page_metadata(rows):
                 missing_files.append((row, key))
 
     client = TMDbClient(
-        api_key=setting("tmdb_api_key"),
+        api_key="",
         language=metadata_language(),
         fallback_language=metadata_fallback_language(),
         second_fallback_language=metadata_second_fallback_language(),
@@ -1662,8 +1714,10 @@ def router():
         "catalog": catalog_menu,
         "search": lambda: search(params),
         "api_search": lambda: api_search(params),
+        "api_movies": api_movies_menu,
         "api_media": lambda: api_media(params),
         "api_media_detail": lambda: api_media_detail(params),
+        "show_file_name": lambda: show_file_name(params),
         "search_ident": search_ident,
         "recent_searches": recent_searches,
         "advanced_filter": advanced_filter,

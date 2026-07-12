@@ -37,6 +37,12 @@ TMDB_FALLBACK_LANGUAGES=cs-CZ,en-US
 TMDB_MAX_CONCURRENCY=2
 TMDB_REQUEST_DELAY_MS=300
 TMDB_CACHE_TTL_DAYS=30
+TMDB_LIVE_REQUEST_TIMEOUT_MS=2500
+TMDB_LIVE_TOTAL_TIMEOUT_MS=5000
+TMDB_LIVE_CACHE_TTL_HOURS=6
+TMDB_LIVE_STALE_TTL_HOURS=168
+TMDB_LIVE_ERROR_TTL_MINUTES=5
+TMDB_LIVE_RATE_LIMIT_PER_MINUTE=30
 METADATA_AUTO_MATCH_THRESHOLD=0.90
 METADATA_AMBIGUOUS_THRESHOLD=0.72
 ```
@@ -137,6 +143,7 @@ GET /api/categories
 GET /api/media
 GET /api/media/:id
 GET /api/media/:id/files
+GET /api/media/:id/metadata
 GET /api/media/:id/episodes
 GET /api/search?q=
 GET /api/search/movies?q=
@@ -147,7 +154,9 @@ GET /api/filters/languages
 GET /api/filters/qualities
 ```
 
-Listing podporuje `category`, `page`, `limit`, `sort`, `order`, `year`, `genre`, `language`, `quality` a `query`. Server vždy obmedzí maximálnu veľkosť stránky. Detail súboru vracia `ident` a `webshare://` placeholder, nikdy WST alebo stream URL.
+Listing podporuje `category`, `page`, `limit`, `sort`, `order`, `year`, `genre`, `language`, `quality` a `query`. Sort `release_date_desc` používa dátum premiéry a pri jeho absencii rok; tituly bez oboch hodnôt vynechá. Server vždy obmedzí maximálnu veľkosť stránky. Detail súboru vracia `ident` a `webshare://` placeholder, nikdy WST alebo stream URL.
+
+Endpoint `/api/media/:id/metadata` nikdy nehľadá titul podľa názvu. Použije iba vopred priradené TMDb ID, krátky timeout, jazykový fallback `sk-SK → cs-CZ → en-US`, samostatnú SQLite cache a rate limit. Nedostupné metadata vrátia bezpečný fallback; zoznam súborov ani prehrávanie tým nie sú blokované.
 
 ## Kodi
 

@@ -3,7 +3,6 @@
   <category label="Účty">
     <setting id="username" type="text" label="Používateľské meno Webshare" default=""/>
     <setting id="password" type="text" label="Heslo Webshare" option="hidden" default=""/>
-    <setting id="tmdb_api_key" type="text" label="TMDb API key" option="hidden" default=""/>
     <setting id="metadata_language" type="labelenum" label="Jazyk metadát" values="sk-SK|cs-CZ|en-US" default="0"/>
     <setting id="metadata_fallback_language" type="labelenum" label="Záložný jazyk metadát" values="cs-CZ|en-US|sk-SK" default="0"/>
     <setting id="metadata_second_fallback_language" type="labelenum" label="Druhý záložný jazyk metadát" values="en-US|cs-CZ|sk-SK" default="0"/>
@@ -88,7 +87,7 @@
   </category>
 
   <category label="Informácie">
-    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.7.0" enable="false"/>
+    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.8.0" enable="false"/>
     <setting id="catalog_status_info" type="text" label="Stav katalógu" default="Lokálny SQLite index" enable="false"/>
     <setting id="catalog_items_info" type="text" label="Počet indexovaných položiek" default="Pozri Nástroje / Katalóg" enable="false"/>
     <setting id="catalog_updated_info" type="text" label="Posledná aktualizácia" default="Pozri Nástroje / Katalóg" enable="false"/>

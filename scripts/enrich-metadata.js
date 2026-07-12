@@ -86,14 +86,15 @@ function applyMovieMatch(database, job, candidate, metadata, confidence, config)
     `).run(targetMediaId, candidate.media_id);
   }
   database.prepare(`
-    UPDATE media SET external_source = 'tmdb', external_id = ?, media_type = 'movie',
+    UPDATE media SET external_source = 'tmdb', external_id = ?, external_url = ?, media_type = 'movie',
       category = ?, title = ?, original_title = ?, year = ?, release_date = ?, overview = ?,
       genres_json = ?, runtime_minutes = ?, rating = ?, vote_count = ?, countries_json = ?,
       languages_json = ?, director = ?, cast_json = ?, poster_url = ?, backdrop_url = ?,
       adult = ?, metadata_language = ?, metadata_status = 'matched', metadata_confidence = ?,
       metadata_updated_at = ?, classifier_version = ?, updated_at = ? WHERE id = ?
   `).run(
-    metadata.externalId, classification.category, metadata.title || candidate.normalized_title,
+    metadata.externalId, `https://www.themoviedb.org/movie/${metadata.externalId}`,
+    classification.category, metadata.title || candidate.normalized_title,
     metadata.originalTitle, metadata.year, metadata.releaseDate, metadata.overview,
     JSON.stringify(metadata.genres), metadata.runtime, metadata.rating, metadata.voteCount,
     JSON.stringify(metadata.countries), JSON.stringify(metadata.languages), metadata.director,
@@ -116,14 +117,15 @@ function applyTvMatch(database, job, metadata, confidence, config) {
   const showClassification = classifyMedia({ media: { ...metadata, media_type: "tv", external_id: metadata.externalId } });
   const showId = existingShow?.id || database.prepare(`
     INSERT INTO media(
-      media_key, external_source, external_id, media_type, category, title, original_title,
+      media_key, external_source, external_id, external_url, media_type, category, title, original_title,
       year, release_date, overview, genres_json, runtime_minutes, rating, vote_count,
       countries_json, languages_json, director, cast_json, poster_url, backdrop_url,
       adult, metadata_language, metadata_status, metadata_confidence, metadata_updated_at,
       classifier_version, created_at, updated_at
-    ) VALUES (?, 'tmdb', ?, 'tv', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'matched', ?, ?, ?, ?, ?)
+    ) VALUES (?, 'tmdb', ?, ?, 'tv', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'matched', ?, ?, ?, ?, ?)
   `).run(
-    showKey, metadata.externalId, showClassification.category, metadata.title, metadata.originalTitle,
+    showKey, metadata.externalId, `https://www.themoviedb.org/tv/${metadata.externalId}`,
+    showClassification.category, metadata.title, metadata.originalTitle,
     metadata.year, metadata.releaseDate, metadata.overview, JSON.stringify(metadata.genres), metadata.runtime,
     metadata.rating, metadata.voteCount, JSON.stringify(metadata.countries), JSON.stringify(metadata.languages),
     metadata.director, JSON.stringify(metadata.cast), metadata.posterUrl, metadata.backdropUrl, metadata.adult,
@@ -131,10 +133,12 @@ function applyTvMatch(database, job, metadata, confidence, config) {
   ).lastInsertRowid;
   if (existingShow) {
     database.prepare(`
-      UPDATE media SET title = ?, original_title = ?, category = ?, overview = ?, genres_json = ?,
+      UPDATE media SET external_source = 'tmdb', external_id = ?, external_url = ?,
+        title = ?, original_title = ?, category = ?, year = ?, release_date = ?, overview = ?, genres_json = ?,
         poster_url = ?, backdrop_url = ?, rating = ?, vote_count = ?, metadata_status = 'matched',
         metadata_confidence = ?, metadata_updated_at = ?, updated_at = ? WHERE id = ?
-    `).run(metadata.title, metadata.originalTitle, showClassification.category, metadata.overview,
+    `).run(metadata.externalId, `https://www.themoviedb.org/tv/${metadata.externalId}`,
+      metadata.title, metadata.originalTitle, showClassification.category, metadata.year, metadata.releaseDate, metadata.overview,
       JSON.stringify(metadata.genres), metadata.posterUrl, metadata.backdropUrl, metadata.rating,
       metadata.voteCount, confidence, now, now, showId);
   }
@@ -160,13 +164,15 @@ function applyTvMatch(database, job, metadata, confidence, config) {
         .run(targetEpisodeMediaId, now, episode.id);
     }
     database.prepare(`
-      UPDATE media SET external_source = 'tmdb', external_id = ?, media_type = 'episode',
+      UPDATE media SET external_source = 'tmdb', external_id = ?, external_url = ?, media_type = 'episode',
         category = 'series', tvshow_id = ?, poster_url = COALESCE(poster_url, ?),
         backdrop_url = COALESCE(backdrop_url, ?), metadata_language = ?,
         metadata_status = 'matched', metadata_confidence = ?, metadata_updated_at = ?,
         classifier_version = ?, updated_at = ? WHERE id = ?
     `).run(
-      episodeExternalId, showId,
+      episodeExternalId,
+      `https://www.themoviedb.org/tv/${metadata.externalId}/season/${episode.season_number}/episode/${episode.episode_number}`,
+      showId,
       metadata.posterUrl, metadata.backdropUrl, config.tmdbLanguage, confidence, now,
       showClassification.classifierVersion, now, targetEpisodeMediaId
     );

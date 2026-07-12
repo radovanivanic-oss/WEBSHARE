@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-USER_AGENT = "AG Kino Catalog API/0.7.0"
+USER_AGENT = "Webshare Atlas Catalog API/0.8.0"
 
 
 class CatalogApiError(Exception):
@@ -58,6 +58,9 @@ class CatalogApiClient(object):
             "/media/{}/files".format(int(media_id)),
             {"page": page, "limit": limit},
         )
+
+    def metadata(self, media_id):
+        return self._get("/media/{}/metadata".format(int(media_id)))
 
     def episodes(self, media_id, page=1, limit=50):
         return self._get(

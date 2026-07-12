@@ -4,6 +4,26 @@ const { getCatalogConfig } = require("../src/config/catalog-config");
 const { openCatalogDatabase } = require("../src/db/catalog-db");
 const { migrateDatabase } = require("../src/db/migrate");
 const { createCatalogRepository } = require("../src/repositories/catalog-repository");
+const { TmdbLiveMetadata } = require("../providers/tmdb-live-metadata");
+
+function createRateLimiter(limit, windowMilliseconds = 60000) {
+  const clients = new Map();
+  return function allow(clientId) {
+    const now = Date.now();
+    if (clients.size > 10000) {
+      for (const [key, value] of clients) {
+        if (now - value.startedAt >= windowMilliseconds) clients.delete(key);
+      }
+    }
+    const current = clients.get(clientId);
+    if (!current || now - current.startedAt >= windowMilliseconds) {
+      clients.set(clientId, { startedAt: now, count: 1 });
+      return true;
+    }
+    current.count += 1;
+    return current.count <= limit;
+  };
+}
 
 function createCatalogApi(options = {}) {
   const config = options.config || getCatalogConfig();
@@ -12,9 +32,12 @@ function createCatalogApi(options = {}) {
     migrateDatabase(database, config.migrationsDir, { logger: options.logger || console });
   }
   const repository = createCatalogRepository(database, config);
+  const metadataProvider = options.metadataProvider || new TmdbLiveMetadata(config, database, options.logger || console);
+  const allowMetadataRequest = createRateLimiter(config.tmdbLiveRateLimitPerMinute);
   const app = Fastify({
     logger: options.logger === false ? false : { level: process.env.CATALOG_API_LOG_LEVEL || "info" },
     bodyLimit: 16384,
+    trustProxy: "127.0.0.1",
   });
   const base = config.apiBasePath;
 
@@ -42,6 +65,48 @@ function createCatalogApi(options = {}) {
     if (!Number.isFinite(id) || id < 1) return reply.code(400).send({ error: "invalid_media_id" });
     if (!repository.getMedia(id)) return reply.code(404).send({ error: "media_not_found" });
     return repository.getMediaFiles(id, request.query);
+  });
+
+  app.get(`${base}/media/:id/metadata`, async (request, reply) => {
+    const id = Number.parseInt(request.params.id, 10);
+    if (!Number.isFinite(id) || id < 1) return reply.code(400).send({ error: "invalid_media_id" });
+    const media = repository.getMedia(id);
+    if (!media) return reply.code(404).send({ error: "media_not_found" });
+    if (!allowMetadataRequest(request.ip)) {
+      return {
+        available: false,
+        metadataAvailable: false,
+        source: media.external_source || null,
+        externalId: media.external_id || null,
+        overview: null,
+        posterUrl: null,
+        backdropUrl: null,
+        genres: [],
+        runtimeMinutes: null,
+        rating: null,
+        message: "Popis nie je k dispozícii.",
+        reason: "rate_limited",
+      };
+    }
+    try {
+      return await metadataProvider.get(media);
+    } catch (error) {
+      request.log.warn({ code: error.code || null }, "Live metadata provider failed");
+      return {
+        available: false,
+        metadataAvailable: false,
+        source: media.external_source || null,
+        externalId: media.external_id || null,
+        overview: null,
+        posterUrl: null,
+        backdropUrl: null,
+        genres: [],
+        runtimeMinutes: null,
+        rating: null,
+        message: "Popis nie je k dispozícii.",
+        reason: "metadata_provider_error",
+      };
+    }
   });
 
   app.get(`${base}/media/:id/episodes`, async (request, reply) => {
@@ -107,5 +172,6 @@ if (require.main === module) {
 }
 
 module.exports = {
+  createRateLimiter,
   createCatalogApi,
 };

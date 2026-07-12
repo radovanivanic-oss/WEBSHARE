@@ -39,6 +39,12 @@ function getCatalogConfig(env = process.env) {
     tmdbMaxConcurrency: parsePositiveInteger(env.TMDB_MAX_CONCURRENCY, 2),
     tmdbRequestDelayMs: parsePositiveInteger(env.TMDB_REQUEST_DELAY_MS, 300),
     tmdbCacheTtlDays: parsePositiveInteger(env.TMDB_CACHE_TTL_DAYS, 30),
+    tmdbLiveRequestTimeoutMs: parsePositiveInteger(env.TMDB_LIVE_REQUEST_TIMEOUT_MS, 2500),
+    tmdbLiveTotalTimeoutMs: parsePositiveInteger(env.TMDB_LIVE_TOTAL_TIMEOUT_MS, 5000),
+    tmdbLiveCacheTtlHours: parsePositiveInteger(env.TMDB_LIVE_CACHE_TTL_HOURS, 6),
+    tmdbLiveStaleTtlHours: parsePositiveInteger(env.TMDB_LIVE_STALE_TTL_HOURS, 168),
+    tmdbLiveErrorTtlMinutes: parsePositiveInteger(env.TMDB_LIVE_ERROR_TTL_MINUTES, 5),
+    tmdbLiveRateLimitPerMinute: parsePositiveInteger(env.TMDB_LIVE_RATE_LIMIT_PER_MINUTE, 30),
     metadataAutoMatchThreshold: parseNumber(env.METADATA_AUTO_MATCH_THRESHOLD, 0.9),
     metadataAmbiguousThreshold: parseNumber(env.METADATA_AMBIGUOUS_THRESHOLD, 0.72),
   };

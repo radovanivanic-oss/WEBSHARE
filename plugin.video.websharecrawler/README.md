@@ -1,8 +1,8 @@
-# AG Kino Kodi Addon
+# Webshare Atlas Kodi Addon
 
 ## Katalógové API
 
-Od verzie 0.7.0 môže addon namiesto veľkých JSON súborov používať stránkované serverové API.
+Od verzie 0.8.0 môže addon namiesto veľkých JSON súborov používať stránkované serverové API, premiérové novinky a serverové live metadata.
 
 V nastaveniach zapni `Používať stránkované katalógové API` a nastav napríklad:
 
@@ -12,7 +12,7 @@ http://192.168.2.226/api
 
 Pri vypnutom API režime zostáva aktívny pôvodný JSON/SQLite workflow. Webshare login a `api/file_link` resolver zostávajú v Kodi a server nikdy neposiela WST token.
 
-AG Kino je Kodi video addon nad lokálnym exportom z Webshare crawlera.
+Webshare Atlas je Kodi video addon nad lokálnym exportom z Webshare crawlera.
 
 Crawler ostáva oddelený:
 
@@ -128,7 +128,7 @@ Kodi update z lokálneho ZIPu funguje spoľahlivo vtedy, keď je verzia v `addon
 
 Hotové:
 
-- vlastná identita a menu AG Kino
+- vlastná identita a menu Webshare Atlas
 - lokálny SQLite index
 - gzip/json katalóg s fallbackom
 - lokálne fulltextové hľadanie
@@ -137,7 +137,9 @@ Hotové:
 - pokročilý lokálny filter
 - pripnutie a skrytie položiek na hlavnej stránke
 - filmy / seriály / kvalita / roky / jazyk
-- Novinky a Najnovšie pridané podľa lokálneho poradia katalógu
+- Novinky podľa `release_date` s fallbackom na rok
+- živý popis a artwork cez serverovú TMDb proxy bez TMDb kľúča v Kodi
+- čisté technické názvy Webshare verzií s HDR, Dolby Vision, kodekmi, jazykom a veľkosťou
 - Žánre s bezpečným fallbackom na neznáme/neurčené
 - Dabing / titulky odvodené heuristicky z názvu súboru
 - stránkované listingy

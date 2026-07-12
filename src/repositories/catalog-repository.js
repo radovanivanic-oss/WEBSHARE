@@ -30,8 +30,21 @@ function escapeFtsQuery(value) {
     .join(" AND ");
 }
 
+function externalUrlFor(row) {
+  if (row.external_url) return row.external_url;
+  if (row.external_source !== "tmdb" || !row.external_id) return null;
+  if (row.media_type === "tv") return `https://www.themoviedb.org/tv/${row.external_id}`;
+  if (row.media_type === "episode") {
+    const match = String(row.external_id).match(/^(\d+):s(\d+):e(\d+)$/i);
+    if (match) return `https://www.themoviedb.org/tv/${match[1]}/season/${Number(match[2])}/episode/${Number(match[3])}`;
+    return null;
+  }
+  return `https://www.themoviedb.org/movie/${row.external_id}`;
+}
+
 function serializeMedia(row) {
   if (!row) return null;
+  const externalUrl = externalUrlFor(row);
   return {
     id: row.id,
     media_key: row.media_key,
@@ -41,6 +54,9 @@ function serializeMedia(row) {
     original_title: row.original_title,
     year: row.year,
     release_date: row.release_date,
+    external_source: row.external_source,
+    external_id: row.external_id,
+    external_url: externalUrl,
     season_number: row.season_number,
     episode_number: row.episode_number,
     tvshow_id: row.tvshow_id,
@@ -58,7 +74,11 @@ function serializeMedia(row) {
     adult: Boolean(row.adult),
     metadata_status: row.metadata_status,
     metadata_confidence: row.metadata_confidence,
+    metadata_language: row.metadata_language,
+    metadata_updated_at: row.metadata_updated_at,
     versions: row.version_count === undefined ? undefined : row.version_count,
+    available_files_count: row.version_count === undefined ? undefined : row.version_count,
+    best_quality: row.best_quality === undefined ? undefined : row.best_quality,
     updated_at: row.updated_at,
   };
 }
@@ -68,7 +88,9 @@ function serializeFile(row) {
     id: row.id,
     ident: row.ident,
     name: row.original_name,
+    original_name: row.original_name,
     size: row.size_bytes,
+    size_bytes: row.size_bytes,
     extension: row.extension,
     resolution: row.parsed_resolution,
     source: row.parsed_source,
@@ -82,6 +104,7 @@ function serializeFile(row) {
     positive_votes: row.positive_votes,
     negative_votes: row.negative_votes,
     password_protected: Boolean(row.password_protected),
+    is_active: Boolean(row.is_active),
     source_provider: "webshare",
     needs_file_link: true,
     url: `webshare://${row.ident}`,
@@ -122,6 +145,9 @@ function createCatalogRepository(database, config) {
       where.push("EXISTS (SELECT 1 FROM files quality_file WHERE quality_file.media_id = m.id AND quality_file.is_active = 1 AND quality_file.parsed_resolution = ?)");
       values.push(params.quality);
     }
+    if (params.sort === "release_date_desc") {
+      where.push("(m.release_date IS NOT NULL OR m.year IS NOT NULL)");
+    }
     if (params.query) {
       const fts = escapeFtsQuery(params.query);
       if (fts) {
@@ -135,12 +161,15 @@ function createCatalogRepository(database, config) {
   function listMedia(params = {}) {
     const page = positiveInteger(params.page, 1);
     const limit = Math.min(config.apiMaxPageSize, positiveInteger(params.limit, 50));
-    const order = String(params.order || "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
+    const order = params.sort === "release_date_desc"
+      ? "DESC"
+      : String(params.order || "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
     const sortColumns = {
       recent: "m.updated_at",
       title: "m.title COLLATE NOCASE",
       year: "m.year",
       rating: "m.rating",
+      release_date_desc: "COALESCE(m.release_date, printf('%04d-01-01', m.year))",
     };
     const sortColumn = sortColumns[params.sort] || sortColumns.recent;
     const query = buildMediaQuery(params);
@@ -152,7 +181,16 @@ function createCatalogRepository(database, config) {
       ) ELSE (
         SELECT COUNT(*) FROM files direct_file
         WHERE direct_file.media_id = m.id AND direct_file.is_active = 1 AND direct_file.is_playable_video = 1
-      ) END AS version_count
+      ) END AS version_count,
+      CASE WHEN m.media_type = 'tv' THEN NULL ELSE (
+        SELECT best_file.parsed_resolution FROM files best_file
+        WHERE best_file.media_id = m.id AND best_file.is_active = 1 AND best_file.is_playable_video = 1
+        ORDER BY CASE best_file.parsed_resolution
+          WHEN '4320p' THEN 6 WHEN '2160p' THEN 5 WHEN '1080p' THEN 4
+          WHEN '720p' THEN 3 WHEN '576p' THEN 2 WHEN '480p' THEN 1 ELSE 0 END DESC,
+          best_file.size_bytes DESC
+        LIMIT 1
+      ) END AS best_quality
       FROM media m
       WHERE ${query.where}
       ORDER BY ${sortColumn} ${order}, m.id ${order}
@@ -172,7 +210,16 @@ function createCatalogRepository(database, config) {
       ) ELSE (
         SELECT COUNT(*) FROM files direct_file
         WHERE direct_file.media_id = m.id AND direct_file.is_active = 1 AND direct_file.is_playable_video = 1
-      ) END AS version_count
+      ) END AS version_count,
+      CASE WHEN m.media_type = 'tv' THEN NULL ELSE (
+        SELECT best_file.parsed_resolution FROM files best_file
+        WHERE best_file.media_id = m.id AND best_file.is_active = 1 AND best_file.is_playable_video = 1
+        ORDER BY CASE best_file.parsed_resolution
+          WHEN '4320p' THEN 6 WHEN '2160p' THEN 5 WHEN '1080p' THEN 4
+          WHEN '720p' THEN 3 WHEN '576p' THEN 2 WHEN '480p' THEN 1 ELSE 0 END DESC,
+          best_file.size_bytes DESC
+        LIMIT 1
+      ) END AS best_quality
       FROM media m WHERE m.id = ?
     `).get(id);
     if (!row) return null;
@@ -310,6 +357,7 @@ module.exports = {
   CATEGORY_TITLES,
   createCatalogRepository,
   escapeFtsQuery,
+  externalUrlFor,
   positiveInteger,
   serializeFile,
   serializeMedia,

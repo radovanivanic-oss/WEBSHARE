@@ -111,3 +111,72 @@ test("catalog API paginates, limits output and exposes versions without tokens",
     database.close();
   }
 });
+
+test("movie news use release dates and metadata failures do not block files", async (t) => {
+  const fixture = await createImportedFixture(t);
+  const database = openCatalogDatabase(fixture.databasePath, { fileMustExist: true });
+  const dune = database.prepare("SELECT * FROM media WHERE media_type = 'movie' AND is_active = 1 LIMIT 1").get();
+  const now = new Date().toISOString();
+  database.prepare(`
+    UPDATE media SET external_source = 'tmdb', external_id = '693134',
+      external_url = 'https://www.themoviedb.org/movie/693134', release_date = '2024-02-27'
+    WHERE id = ?
+  `).run(dune.id);
+  const insertMedia = database.prepare(`
+    INSERT INTO media(
+      media_key, media_type, category, title, year, release_date,
+      metadata_status, metadata_confidence, created_at, updated_at, is_active
+    ) VALUES (?, 'movie', 'movies', ?, ?, ?, 'local', 0.5, ?, ?, 1)
+  `);
+  const newestId = Number(insertMedia.run("local:newest", "Newest Movie", 2025, "2025-05-10", now, now).lastInsertRowid);
+  insertMedia.run("local:unknown-year", "Unknown Year", null, null, now, now);
+
+  const metadataProvider = {
+    async get(media) {
+      if (media.id === newestId) throw Object.assign(new Error("provider failed"), { code: "TEST_FAILURE" });
+      return {
+        available: true,
+        metadataAvailable: true,
+        source: "tmdb",
+        externalId: media.external_id,
+        overview: "Live overview",
+        posterUrl: "https://image.test/poster.jpg",
+        backdropUrl: null,
+        genres: ["Sci-Fi"],
+        runtimeMinutes: 166,
+        rating: 8.3,
+      };
+    },
+  };
+  const config = { ...getCatalogConfig({ CATALOG_DB_PATH: fixture.databasePath }), apiBasePath: "/api" };
+  const app = createCatalogApi({ config, database, skipMigrations: true, logger: false, metadataProvider });
+  try {
+    const listing = await app.inject({ method: "GET", url: "/api/media?category=movies&sort=release_date_desc&page=1&limit=50" });
+    assert.equal(listing.statusCode, 200);
+    assert.deepEqual(listing.json().data.map((item) => item.title), ["Newest Movie", dune.title]);
+    assert.equal(listing.json().data.some((item) => item.title === "Unknown Year"), false);
+    const duneListing = listing.json().data.find((item) => item.id === dune.id);
+    assert.equal(duneListing.external_id, "693134");
+    assert.equal(duneListing.external_url, "https://www.themoviedb.org/movie/693134");
+    assert.equal(duneListing.available_files_count, 2);
+    assert.equal(duneListing.best_quality, "2160p");
+
+    const metadata = await app.inject({ method: "GET", url: `/api/media/${dune.id}/metadata` });
+    assert.equal(metadata.statusCode, 200);
+    assert.equal(metadata.json().overview, "Live overview");
+
+    const fallback = await app.inject({ method: "GET", url: `/api/media/${newestId}/metadata` });
+    assert.equal(fallback.statusCode, 200);
+    assert.equal(fallback.json().available, false);
+    assert.equal(fallback.json().reason, "metadata_provider_error");
+
+    const files = await app.inject({ method: "GET", url: `/api/media/${dune.id}/files` });
+    assert.equal(files.statusCode, 200);
+    assert.equal(files.json().data[0].original_name, files.json().data[0].name);
+    assert.equal(files.json().data[0].size_bytes, files.json().data[0].size);
+    assert.equal(files.json().data[0].is_active, true);
+  } finally {
+    await app.close();
+    database.close();
+  }
+});
