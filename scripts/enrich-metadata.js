@@ -8,12 +8,20 @@ const { migrateDatabase } = require("../src/db/migrate");
 const { rebuildMediaFts, setAppState } = require("../src/repositories/media-repository");
 
 function parseArguments(argv) {
-  const options = { limit: 1000, dryRun: false, retryFailed: false, onlyPending: false, provider: "tmdb" };
+  const options = {
+    limit: 1000,
+    dryRun: false,
+    retryFailed: false,
+    onlyPending: false,
+    recentFirst: false,
+    provider: "tmdb",
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--dry-run") options.dryRun = true;
     else if (value === "--retry-failed") options.retryFailed = true;
     else if (value === "--only-pending") options.onlyPending = true;
+    else if (value === "--recent-first") options.recentFirst = true;
     else if (value === "--limit") options.limit = Number.parseInt(argv[++index], 10) || 1000;
     else if (value === "--provider") options.provider = argv[++index] || "tmdb";
   }
@@ -264,10 +272,13 @@ async function runWorker(options) {
   const client = new TmdbClient(config, database, console);
   const statuses = jobStatuses(options);
   const placeholders = statuses.map(() => "?").join(",");
+  const orderBy = options.recentFirst
+    ? "attempts, CASE WHEN candidate_type = 'movie' THEN 0 ELSE 1 END, parsed_year DESC, id"
+    : "attempts, id";
   const jobs = database.prepare(`
     SELECT * FROM metadata_jobs
     WHERE status IN (${placeholders}) AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-    ORDER BY attempts, id LIMIT ?
+    ORDER BY ${orderBy} LIMIT ?
   `).all(...statuses, nowIso(), options.limit);
   let cursor = 0;
   const counts = {};
@@ -318,6 +329,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  parseArguments,
   mapMetadata,
   parseArguments,
   processJob,

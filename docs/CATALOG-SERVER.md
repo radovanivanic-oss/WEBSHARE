@@ -110,6 +110,7 @@ Filmy bez roku zostávajú oddelené od filmov s rokom. Fuzzy podobnosť sa nepo
 ```bash
 npm run metadata:enrich -- --limit 1000
 npm run metadata:enrich -- --only-pending --limit 1000
+npm run metadata:enrich -- --only-pending --recent-first --limit 1000
 npm run metadata:enrich -- --retry-failed --limit 100
 npm run metadata:enrich -- --dry-run --limit 50
 ```
