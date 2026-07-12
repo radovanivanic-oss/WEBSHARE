@@ -202,6 +202,20 @@ function rebuildDerivedCatalogData(database) {
         COALESCE((SELECT GROUP_CONCAT(alias, ' ') FROM media_aliases WHERE media_id = media.id), '')
       FROM media
     `);
+    database.exec("UPDATE media SET is_active = 0;");
+    database.exec(`
+      UPDATE media SET is_active = 1 WHERE EXISTS (
+        SELECT 1 FROM files
+        WHERE files.media_id = media.id AND files.is_active = 1 AND files.is_playable_video = 1
+      )
+    `);
+    database.exec(`
+      UPDATE media SET is_active = 1
+      WHERE media.media_type = 'tv' AND EXISTS (
+        SELECT 1 FROM media episode JOIN files ON files.media_id = episode.id
+        WHERE episode.tvshow_id = media.id AND files.is_active = 1 AND files.is_playable_video = 1
+      )
+    `);
   });
   rebuild();
 }

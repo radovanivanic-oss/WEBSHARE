@@ -90,15 +90,7 @@ function serializeFile(row) {
 
 function createCatalogRepository(database, config) {
   function buildMediaQuery(params = {}) {
-    const where = [
-      `(EXISTS (
-        SELECT 1 FROM files active_file
-        WHERE active_file.media_id = m.id AND active_file.is_active = 1 AND active_file.is_playable_video = 1
-      ) OR (m.media_type = 'tv' AND EXISTS (
-        SELECT 1 FROM media episode_media JOIN files episode_file ON episode_file.media_id = episode_media.id
-        WHERE episode_media.tvshow_id = m.id AND episode_file.is_active = 1 AND episode_file.is_playable_video = 1
-      )))`,
-    ];
+    const where = ["m.is_active = 1"];
     const values = [];
     if (params.category) {
       where.push("m.category = ?");
@@ -216,9 +208,7 @@ function createCatalogRepository(database, config) {
     const limit = Math.min(config.apiMaxPageSize, positiveInteger(params.limit, 50));
     const total = database.prepare(`
       SELECT COUNT(*) AS count FROM media episode
-      WHERE episode.tvshow_id = ? AND EXISTS (
-        SELECT 1 FROM files f WHERE f.media_id = episode.id AND f.is_active = 1 AND f.is_playable_video = 1
-      )
+      WHERE episode.tvshow_id = ? AND episode.is_active = 1
     `).get(tvshowId).count;
     const rows = database.prepare(`
       SELECT episode.*, (
@@ -226,9 +216,7 @@ function createCatalogRepository(database, config) {
         WHERE f.media_id = episode.id AND f.is_active = 1 AND f.is_playable_video = 1
       ) AS version_count
       FROM media episode
-      WHERE episode.tvshow_id = ? AND EXISTS (
-        SELECT 1 FROM files f WHERE f.media_id = episode.id AND f.is_active = 1 AND f.is_playable_video = 1
-      )
+      WHERE episode.tvshow_id = ? AND episode.is_active = 1
       ORDER BY episode.season_number, episode.episode_number, episode.id
       LIMIT ? OFFSET ?
     `).all(tvshowId, limit, (page - 1) * limit);
@@ -241,12 +229,7 @@ function createCatalogRepository(database, config) {
   function categories() {
     const counts = database.prepare(`
       SELECT m.category, COUNT(DISTINCT m.id) AS count FROM media m
-      WHERE (m.category != 'series' AND EXISTS (
-        SELECT 1 FROM files f WHERE f.media_id = m.id AND f.is_active = 1 AND f.is_playable_video = 1
-      )) OR (m.category = 'series' AND m.media_type = 'tv' AND EXISTS (
-        SELECT 1 FROM media episode JOIN files f ON f.media_id = episode.id
-        WHERE episode.tvshow_id = m.id AND f.is_active = 1 AND f.is_playable_video = 1
-      ))
+      WHERE m.is_active = 1 AND (m.category != 'series' OR m.media_type = 'tv')
       GROUP BY m.category
     `).all();
     const byCategory = new Map(counts.map((row) => [row.category, row.count]));

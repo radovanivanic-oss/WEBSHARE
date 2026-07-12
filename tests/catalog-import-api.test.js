@@ -58,6 +58,7 @@ test("streaming import is idempotent and groups file versions", async (t) => {
   assert.equal(database.prepare("SELECT file_count FROM candidates WHERE candidate_key LIKE 'episode|the-last-of-us|s01|e003'").get().file_count, 2);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM metadata_jobs").get().count, 2);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM media WHERE media_type = 'tv'").get().count, 1);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM media WHERE is_active = 1").get().count, 3);
   assert.equal(database.prepare("SELECT invalid_count FROM import_runs ORDER BY id DESC LIMIT 1").get().invalid_count, 1);
   database.close();
 

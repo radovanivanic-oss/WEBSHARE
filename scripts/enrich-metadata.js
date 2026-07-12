@@ -79,6 +79,11 @@ function applyMovieMatch(database, job, candidate, metadata, confidence, config)
       .run(targetMediaId, now, candidate.id);
     database.prepare("UPDATE candidates SET media_id = ?, updated_at = ? WHERE id = ?")
       .run(targetMediaId, now, candidate.id);
+    database.prepare(`
+      UPDATE media SET is_active = CASE WHEN EXISTS (
+        SELECT 1 FROM files WHERE files.media_id = media.id AND files.is_active = 1 AND files.is_playable_video = 1
+      ) THEN 1 ELSE 0 END WHERE id IN (?, ?)
+    `).run(targetMediaId, candidate.media_id);
   }
   database.prepare(`
     UPDATE media SET external_source = 'tmdb', external_id = ?, media_type = 'movie',
@@ -136,8 +141,11 @@ function applyTvMatch(database, job, metadata, confidence, config) {
 
   const episodeRows = database.prepare("SELECT * FROM candidates WHERE lookup_key = ?").all(job.candidate_key);
   const mediaIds = [showId];
+  const previousShowIds = new Set();
   for (const episode of episodeRows) {
     if (!episode.media_id) continue;
+    const previousEpisodeMedia = database.prepare("SELECT tvshow_id FROM media WHERE id = ?").get(episode.media_id);
+    if (previousEpisodeMedia?.tvshow_id) previousShowIds.add(previousEpisodeMedia.tvshow_id);
     const episodeExternalId = `${metadata.externalId}:s${episode.season_number}:e${episode.episode_number}`;
     const duplicateEpisode = database.prepare(`
       SELECT id FROM media
@@ -165,6 +173,15 @@ function applyTvMatch(database, job, metadata, confidence, config) {
     database.prepare("UPDATE candidates SET status = 'matched', updated_at = ? WHERE id = ?")
       .run(now, episode.id);
     mediaIds.push(targetEpisodeMediaId);
+  }
+  database.prepare("UPDATE media SET is_active = 1 WHERE id = ?").run(showId);
+  for (const previousShowId of previousShowIds) {
+    if (previousShowId === showId) continue;
+    database.prepare(`
+      UPDATE media SET is_active = CASE WHEN EXISTS (
+        SELECT 1 FROM media episode WHERE episode.tvshow_id = media.id AND episode.is_active = 1
+      ) THEN 1 ELSE 0 END WHERE id = ?
+    `).run(previousShowId);
   }
   return [...new Set(mediaIds)];
 }
