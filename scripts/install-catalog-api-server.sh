@@ -5,8 +5,10 @@ PROJECT_DIR="/home/radeco/webshare-crawler"
 
 cd "$PROJECT_DIR"
 export NVM_DIR="$HOME/.nvm"
-# shellcheck disable=SC1090
-. "$NVM_DIR/nvm.sh"
+if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+  # shellcheck disable=SC1090
+  . "$NVM_DIR/nvm.sh"
+fi
 
 if [[ ! -f .env ]]; then
   echo "Chýba $PROJECT_DIR/.env" >&2

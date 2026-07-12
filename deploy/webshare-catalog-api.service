@@ -9,7 +9,8 @@ User=radeco
 Group=radeco
 WorkingDirectory=/home/radeco/webshare-crawler
 EnvironmentFile=/home/radeco/webshare-crawler/.env
-ExecStart=/bin/bash -lc '. /home/radeco/.nvm/nvm.sh && exec node server/catalog-api.js'
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node server/catalog-api.js
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
