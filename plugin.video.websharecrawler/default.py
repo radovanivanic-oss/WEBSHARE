@@ -849,10 +849,11 @@ def listing_action(query):
 
 def api_media(params):
     page = int(params.get("page", "0"))
+    category = params.get("category")
     request_params = {
-        "category": params.get("category"),
+        "category": category,
         "page": page + 1,
-        "limit": page_size(),
+        "limit": api_page_size(category),
         "sort": params.get("sort", "recent"),
         "order": params.get("order", "desc"),
         "year": params.get("year"),
@@ -866,6 +867,8 @@ def api_media(params):
         else:
             response = catalog_api().media(**request_params)
     except CatalogApiError as exc:
+        if api_media_fallback(params, exc):
+            return
         notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
@@ -876,6 +879,38 @@ def api_media(params):
     add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media", params, page)
     xbmcplugin.setContent(HANDLE, "tvshows" if params.get("category") == "series" else "movies")
     xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def api_page_size(category):
+    if category in (None, "", "movies"):
+        return page_size()
+    return min(page_size(), 20)
+
+
+def api_media_fallback(params, error):
+    category = params.get("category")
+    fallback = {
+        "series": ("series_titles", {"preset": "recent"}),
+        "documentaries": ("list", {"catalog_scope": "documentary", "preset": "recent"}),
+        "concerts": ("list", {"catalog_scope": "music", "preset": "recent"}),
+        "anime": ("list", {"catalog_scope": "anime", "preset": "recent"}),
+        "sports": ("list", {"catalog_scope": "sport", "preset": "recent"}),
+        "kids": ("list", {"catalog_scope": "kids", "preset": "recent"}),
+        "music-videos": ("list", {"catalog_scope": "music", "preset": "recent"}),
+        "other": ("list", {"catalog_scope": "other", "preset": "recent"}),
+    }.get(category)
+    if not fallback:
+        return False
+
+    notify("API je pomalé, používam lokálny katalóg", xbmcgui.NOTIFICATION_WARNING)
+    action, query = fallback
+    if params.get("page"):
+        query["page"] = params["page"]
+    if action == "series_titles":
+        series_titles(query)
+    else:
+        list_items(query)
+    return True
 
 
 def add_api_media(media):
