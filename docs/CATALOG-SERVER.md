@@ -115,6 +115,14 @@ npm run metadata:enrich -- --retry-failed --limit 100
 npm run metadata:enrich -- --dry-run --limit 50
 ```
 
+Produkčný dávkový worker s lockom:
+
+```bash
+bash scripts/run-metadata-enrichment.sh
+```
+
+Veľkosť jednej dávky riadi `METADATA_ENRICH_BATCH_SIZE`. Súbežný druhý worker sa bezpečne ukončí.
+
 Stavy jobov: `pending`, `processing`, `matched`, `ambiguous`, `not_found`, `temporary_error`, `permanent_error`.
 
 TMDb odpovede sa cachujú. Epizódy rovnakého seriálu používajú spoločný TV lookup. Kandidáti priradení k rovnakému TMDb ID sa zlúčia na jeden `media` záznam; všetky Webshare verzie zostanú dostupné pod ním.
