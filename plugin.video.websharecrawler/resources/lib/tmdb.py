@@ -114,6 +114,53 @@ class TMDbClient(object):
             "language": details.get("_overview_language") or details.get("_language") or languages[0],
         }
 
+    def fetch_movie_by_id(self, movie_id):
+        if not self.enabled() or not movie_id:
+            return None
+
+        detail_rows = []
+        for language in self.languages():
+            details = self._movie_details(movie_id, language)
+            if details:
+                details["_language"] = language
+                detail_rows.append(details)
+
+        if not detail_rows:
+            return None
+
+        details = detail_rows[0]
+        for fallback_details in detail_rows[1:]:
+            details = _merge_details(details, fallback_details)
+
+        credits = details.get("credits") or {}
+        crew = credits.get("crew") or []
+        cast_rows = credits.get("cast") or []
+        directors = [item.get("name") for item in crew if item.get("job") == "Director" and item.get("name")]
+        cast = [item.get("name") for item in cast_rows[:10] if item.get("name")]
+        countries = [
+            item.get("name") or item.get("iso_3166_1")
+            for item in details.get("production_countries", [])
+            if item.get("name") or item.get("iso_3166_1")
+        ]
+        genres = [item.get("name") for item in details.get("genres", []) if item.get("name")]
+
+        return {
+            "tmdb_id": details.get("id"),
+            "title": details.get("title") or "",
+            "original_title": details.get("original_title") or "",
+            "year": _year(details.get("release_date")),
+            "overview": details.get("overview") or "",
+            "genres": genres,
+            "rating": details.get("vote_average") or 0,
+            "runtime": details.get("runtime") or 0,
+            "countries": countries,
+            "director": ", ".join(directors),
+            "cast": cast,
+            "poster": _image(details.get("poster_path"), "w500"),
+            "backdrop": _image(details.get("backdrop_path"), "w1280"),
+            "language": details.get("_overview_language") or details.get("_language") or self.languages()[0],
+        }
+
     def languages(self):
         result = []
         for language in (

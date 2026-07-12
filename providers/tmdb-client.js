@@ -116,12 +116,56 @@ class TmdbClient {
 
   async details(type, id) {
     const endpoint = type === "tv" ? `/tv/${id}` : `/movie/${id}`;
-    return this.request(endpoint, { append_to_response: "credits,alternative_titles" });
+    const languages = [this.config.tmdbLanguage, ...this.config.tmdbFallbackLanguages]
+      .filter((value, index, list) => value && list.indexOf(value) === index);
+    let merged = null;
+    for (const language of languages) {
+      const details = await this.request(endpoint, { append_to_response: "credits,alternative_titles" }, language);
+      merged = mergeDetails(merged, details);
+      if (String(details.overview || "").trim()) break;
+    }
+    return merged;
   }
+}
+
+function hasValue(value) {
+  return Boolean(value) || (Array.isArray(value) && value.length > 0);
+}
+
+function mergeDetails(primary, fallback) {
+  if (!primary) return fallback;
+  if (!fallback) return primary;
+  const merged = { ...primary };
+  for (const key of [
+    "overview",
+    "poster_path",
+    "backdrop_path",
+    "runtime",
+    "vote_average",
+    "vote_count",
+    "release_date",
+    "first_air_date",
+    "original_title",
+    "original_name",
+    "title",
+    "name",
+    "genres",
+    "production_countries",
+    "origin_country",
+    "spoken_languages",
+    "credits",
+    "alternative_titles",
+  ]) {
+    if (!hasValue(merged[key]) && hasValue(fallback[key])) {
+      merged[key] = fallback[key];
+    }
+  }
+  return merged;
 }
 
 module.exports = {
   TmdbClient,
   cacheKey,
   isTemporaryError,
+  mergeDetails,
 };

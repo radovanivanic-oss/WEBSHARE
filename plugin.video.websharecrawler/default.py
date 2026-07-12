@@ -962,12 +962,54 @@ def api_media_detail(params):
         "poster": live_metadata.get("posterUrl") or detail.get("poster_url") or "",
         "backdrop": live_metadata.get("backdropUrl") or detail.get("backdrop_url") or "",
     }
+    meta = enrich_api_meta_from_tmdb_id(detail, meta)
     for file_row in files:
         add_api_file(file_row, detail, meta)
     pagination = file_response.get("pagination") or {}
     add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_detail", params, page)
     xbmcplugin.setContent(HANDLE, "episodes" if detail.get("media_type") == "episode" else "videos")
     xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def enrich_api_meta_from_tmdb_id(detail, meta):
+    if safe_text(meta.get("overview")):
+        return meta
+    if detail.get("external_source") != "tmdb" or detail.get("media_type") != "movie":
+        return meta
+    external_id = safe_text(detail.get("external_id"))
+    if not external_id.isdigit():
+        return meta
+
+    client = TMDbClient(
+        api_key=setting("tmdb_api_key"),
+        language=metadata_language(),
+        fallback_language=metadata_fallback_language(),
+        second_fallback_language=metadata_second_fallback_language(),
+    )
+    if not client.enabled():
+        return meta
+
+    data = client.fetch_movie_by_id(external_id)
+    if not data:
+        return meta
+
+    merged = dict(meta)
+    for target, source in (
+        ("title", "title"),
+        ("original_title", "original_title"),
+        ("overview", "overview"),
+        ("genres", "genres"),
+        ("rating", "rating"),
+        ("runtime", "runtime"),
+        ("countries", "countries"),
+        ("director", "director"),
+        ("cast", "cast"),
+        ("poster", "poster"),
+        ("backdrop", "backdrop"),
+    ):
+        if not merged.get(target) and data.get(source):
+            merged[target] = data[source]
+    return merged
 
 
 def api_file_label(file_row):
