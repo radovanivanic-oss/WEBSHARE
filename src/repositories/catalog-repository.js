@@ -146,12 +146,11 @@ function createCatalogRepository(database, config) {
       values.push(params.quality);
     }
     if (params.sort === "release_date_desc") {
-      where.push("(m.release_date IS NOT NULL OR m.year IS NOT NULL)");
-      where.push(`(
-        (m.release_date IS NOT NULL AND date(m.release_date) <= date('now'))
-        OR (m.release_date IS NULL AND m.year IS NOT NULL
-          AND m.year <= CAST(strftime('%Y', 'now') AS INTEGER))
-      )`);
+      where.push("m.release_date IS NOT NULL");
+      where.push("date(m.release_date) <= date('now')");
+      where.push("m.external_source = 'tmdb'");
+      where.push("m.external_id IS NOT NULL");
+      where.push("m.metadata_status = 'matched'");
     }
     if (params.query) {
       const fts = escapeFtsQuery(params.query);

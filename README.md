@@ -111,7 +111,7 @@ Addon `plugin.video.websharecrawler` je oddelená vrstva nad hotovým katalógom
 - Kodi addon načítava `videos_all.json.gz` s fallbackom na JSON,
 - stream URL sa rieši až pri kliknutí cez Webshare `api/file_link`,
 - v API režime sa živý popis a artwork načítajú cez serverovú TMDb proxy podľa už priradeného externého ID,
-- sekcia Filmy → Novinky používa dátum premiéry s fallbackom na spoľahlivo odvodený rok.
+- sekcia Filmy → Novinky používa iba overený dátum premiéry z offline TMDb matchingu.
 
 TMDb API kľúč patrí iba do serverového `.env`. Webshare meno, heslo a WST zostávajú iba v profile Kodi a nikdy sa neposielajú katalógovému serveru.
 

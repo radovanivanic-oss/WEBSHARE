@@ -137,7 +137,7 @@ Hotové:
 - pokročilý lokálny filter
 - pripnutie a skrytie položiek na hlavnej stránke
 - filmy / seriály / kvalita / roky / jazyk
-- Novinky podľa `release_date` s fallbackom na rok
+- Novinky iba podľa overeného TMDb `release_date`
 - živý popis a artwork cez serverovú TMDb proxy bez TMDb kľúča v Kodi
 - čisté technické názvy Webshare verzií s HDR, Dolby Vision, kodekmi, jazykom a veľkosťou
 - Žánre s bezpečným fallbackom na neznáme/neurčené

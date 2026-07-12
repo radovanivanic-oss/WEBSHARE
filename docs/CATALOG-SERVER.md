@@ -154,7 +154,7 @@ GET /api/filters/languages
 GET /api/filters/qualities
 ```
 
-Listing podporuje `category`, `page`, `limit`, `sort`, `order`, `year`, `genre`, `language`, `quality` a `query`. Sort `release_date_desc` používa dátum premiéry a pri jeho absencii rok; tituly bez oboch hodnôt vynechá. Server vždy obmedzí maximálnu veľkosť stránky. Detail súboru vracia `ident` a `webshare://` placeholder, nikdy WST alebo stream URL.
+Listing podporuje `category`, `page`, `limit`, `sort`, `order`, `year`, `genre`, `language`, `quality` a `query`. Sort `release_date_desc` používa iba overený dátum premiéry z TMDb matchingu; parserový rok ani Webshare čas sa pre Novinky nepoužívajú. Server vždy obmedzí maximálnu veľkosť stránky. Detail súboru vracia `ident` a `webshare://` placeholder, nikdy WST alebo stream URL.
 
 Endpoint `/api/media/:id/metadata` nikdy nehľadá titul podľa názvu. Použije iba vopred priradené TMDb ID, krátky timeout, jazykový fallback `sk-SK → cs-CZ → en-US`, samostatnú SQLite cache a rate limit. Nedostupné metadata vrátia bezpečný fallback; zoznam súborov ani prehrávanie tým nie sú blokované.
 

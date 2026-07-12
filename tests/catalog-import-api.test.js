@@ -119,7 +119,8 @@ test("movie news use release dates and metadata failures do not block files", as
   const now = new Date().toISOString();
   database.prepare(`
     UPDATE media SET external_source = 'tmdb', external_id = '693134',
-      external_url = 'https://www.themoviedb.org/movie/693134', release_date = '2024-02-27'
+      external_url = 'https://www.themoviedb.org/movie/693134', release_date = '2024-02-27',
+      metadata_status = 'matched'
     WHERE id = ?
   `).run(dune.id);
   const insertMedia = database.prepare(`
@@ -129,6 +130,11 @@ test("movie news use release dates and metadata failures do not block files", as
     ) VALUES (?, 'movie', 'movies', ?, ?, ?, 'local', 0.5, ?, ?, 1)
   `);
   const newestId = Number(insertMedia.run("local:newest", "Newest Movie", 2025, "2025-05-10", now, now).lastInsertRowid);
+  database.prepare(`
+    UPDATE media SET external_source = 'tmdb', external_id = '999001',
+      external_url = 'https://www.themoviedb.org/movie/999001', metadata_status = 'matched'
+    WHERE id = ?
+  `).run(newestId);
   insertMedia.run("local:unknown-year", "Unknown Year", null, null, now, now);
   insertMedia.run("local:future", "Future Movie", 2099, null, now, now);
 
