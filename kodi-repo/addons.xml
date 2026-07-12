@@ -22,13 +22,13 @@
 <addon
   id="repository.websharecrawler"
   name="Webshare Crawler Repository"
-  version="1.0.4"
+  version="1.0.5"
   provider-name="Radeco">
   <extension point="xbmc.addon.repository" name="Webshare Crawler Repository">
     <dir minversion="19.0.0">
-      <info compressed="false">http://192.168.2.226/kodi-repo/addons.xml</info>
-      <checksum>http://192.168.2.226/kodi-repo/addons.xml.md5</checksum>
-      <datadir zip="true">http://192.168.2.226/kodi-repo/</datadir>
+      <info compressed="false">https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/kodi-repo/addons.xml</info>
+      <checksum>https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/kodi-repo/addons.xml.md5</checksum>
+      <datadir zip="true">https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/kodi-repo/</datadir>
     </dir>
   </extension>
   <extension point="xbmc.addon.metadata">
