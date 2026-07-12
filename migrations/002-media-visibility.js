@@ -8,15 +8,16 @@ module.exports = {
       CREATE INDEX idx_media_tvshow_active_episode ON media(tvshow_id, is_active, season_number, episode_number);
 
       UPDATE media SET is_active = 1
-      WHERE EXISTS (
-        SELECT 1 FROM files
-        WHERE files.media_id = media.id AND files.is_active = 1 AND files.is_playable_video = 1
+      WHERE id IN (
+        SELECT DISTINCT media_id FROM files
+        WHERE media_id IS NOT NULL AND is_active = 1 AND is_playable_video = 1
       );
 
       UPDATE media SET is_active = 1
-      WHERE media.media_type = 'tv' AND EXISTS (
-        SELECT 1 FROM media episode JOIN files ON files.media_id = episode.id
-        WHERE episode.tvshow_id = media.id AND files.is_active = 1 AND files.is_playable_video = 1
+      WHERE id IN (
+        SELECT DISTINCT episode.tvshow_id
+        FROM media episode JOIN files ON files.media_id = episode.id
+        WHERE episode.tvshow_id IS NOT NULL AND files.is_active = 1 AND files.is_playable_video = 1
       );
     `);
   },
