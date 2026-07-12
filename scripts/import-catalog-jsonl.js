@@ -90,7 +90,6 @@ function normalizeInteger(value, fallback = 0) {
 
 function prepareStatements(database) {
   return {
-    findFile: database.prepare("SELECT id, candidate_id FROM files WHERE ident = ?"),
     upsertCandidate: database.prepare(`
       INSERT INTO candidates (
         candidate_key, lookup_key, normalized_title, parsed_year, candidate_type,
@@ -115,12 +114,7 @@ function prepareStatements(database) {
       ) ON CONFLICT(media_key) DO UPDATE SET updated_at = excluded.updated_at
       RETURNING id
     `),
-    findMediaByKey: database.prepare("SELECT id FROM media WHERE media_key = ?"),
     linkCandidate: database.prepare("UPDATE candidates SET media_id = ?, updated_at = ? WHERE id = ?"),
-    deleteMediaFts: database.prepare("DELETE FROM media_fts WHERE media_id = ?"),
-    insertMediaFts: database.prepare(
-      "INSERT INTO media_fts(media_id, title, original_title, aliases) VALUES (?, ?, '', '')"
-    ),
     upsertFile: database.prepare(`
       INSERT INTO files (
         ident, original_name, normalized_name, extension, mime, size_bytes,
@@ -182,6 +176,7 @@ function prepareStatements(database) {
         password_protected = excluded.password_protected,
         raw_json = excluded.raw_json,
         updated_at = excluded.updated_at
+      RETURNING created_at = updated_at AS inserted
     `),
     enqueueMetadata: database.prepare(`
       INSERT INTO metadata_jobs (
@@ -190,10 +185,25 @@ function prepareStatements(database) {
       ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
       ON CONFLICT(candidate_key) DO NOTHING
     `),
-    adjustCandidateCount: database.prepare(`
-      UPDATE candidates SET file_count = MAX(0, file_count + ?), updated_at = ? WHERE id = ?
-    `),
   };
+}
+
+function rebuildDerivedCatalogData(database) {
+  const rebuild = database.transaction(() => {
+    database.prepare(`
+      UPDATE candidates SET
+        file_count = (SELECT COUNT(*) FROM files WHERE files.candidate_id = candidates.id),
+        updated_at = ?
+    `).run(nowIso());
+    database.exec("DELETE FROM media_fts;");
+    database.exec(`
+      INSERT INTO media_fts(media_id, title, original_title, aliases)
+      SELECT CAST(media.id AS TEXT), media.title, COALESCE(media.original_title, ''),
+        COALESCE((SELECT GROUP_CONCAT(alias, ' ') FROM media_aliases WHERE media_id = media.id), '')
+      FROM media
+    `);
+  });
+  rebuild();
 }
 
 function createImportBatch(database, statements, context) {
@@ -217,7 +227,6 @@ function createImportBatch(database, statements, context) {
         let tvshowId = null;
         if (candidate.candidateType === "episode" && candidate.seriesKey) {
           const showMediaKey = `local:${candidate.seriesKey}`;
-          const existingShow = statements.findMediaByKey.get(showMediaKey);
           tvshowId = statements.insertMedia.get({
             mediaKey: showMediaKey,
             mediaType: "tv",
@@ -231,10 +240,6 @@ function createImportBatch(database, statements, context) {
             classifierVersion: classification.classifierVersion,
             now,
           }).id;
-          if (!existingShow) {
-            statements.deleteMediaFts.run(tvshowId);
-            statements.insertMediaFts.run(String(tvshowId), parsed.title || originalName);
-          }
         }
         mediaId = statements.insertMedia.get({
           mediaKey: `local:${candidate.candidateKey}`,
@@ -252,11 +257,8 @@ function createImportBatch(database, statements, context) {
           now,
         }).id;
         statements.linkCandidate.run(mediaId, now, candidateRow.id);
-        statements.deleteMediaFts.run(mediaId);
-        statements.insertMediaFts.run(String(mediaId), parsed.title || originalName);
       }
-      const existed = statements.findFile.get(ident);
-      statements.upsertFile.run({
+      const fileResult = statements.upsertFile.get({
         ident,
         originalName,
         normalizedName: parsed.normalizedName,
@@ -296,16 +298,8 @@ function createImportBatch(database, statements, context) {
         rawJson,
         now,
       });
-      if (existed) {
-        updated += 1;
-        if (existed.candidate_id !== candidateRow.id) {
-          if (existed.candidate_id) statements.adjustCandidateCount.run(-1, now, existed.candidate_id);
-          statements.adjustCandidateCount.run(1, now, candidateRow.id);
-        }
-      } else {
-        inserted += 1;
-        statements.adjustCandidateCount.run(1, now, candidateRow.id);
-      }
+      if (fileResult.inserted) inserted += 1;
+      else updated += 1;
 
       if (["movie", "episode"].includes(candidate.candidateType) && parsed.confidence >= 0.6) {
         statements.enqueueMetadata.run(
@@ -432,6 +426,8 @@ async function importCatalog(options) {
       return;
     }
 
+    console.log("Prepočítavam počty verzií a obnovujem FTS index.");
+    rebuildDerivedCatalogData(database);
     const finish = database.transaction(() => {
       database.prepare(`
         UPDATE import_runs SET status = 'completed', byte_offset = ?, line_number = ?,
@@ -486,6 +482,7 @@ module.exports = {
   fileFingerprint,
   importCatalog,
   parseArguments,
+  rebuildDerivedCatalogData,
   readJsonLines,
   validateFullManifest,
 };
