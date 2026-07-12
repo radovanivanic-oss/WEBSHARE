@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-USER_AGENT = "Webshare Atlas Catalog API/0.8.0"
+USER_AGENT = "Webshare Atlas Catalog API/0.8.5"
 
 
 class CatalogApiError(Exception):
@@ -62,10 +62,13 @@ class CatalogApiClient(object):
     def metadata(self, media_id):
         return self._get("/media/{}/metadata".format(int(media_id)))
 
-    def episodes(self, media_id, page=1, limit=50):
+    def seasons(self, media_id):
+        return self._get("/media/{}/seasons".format(int(media_id)))
+
+    def episodes(self, media_id, page=1, limit=50, season=None):
         return self._get(
             "/media/{}/episodes".format(int(media_id)),
-            {"page": page, "limit": limit},
+            {"page": page, "limit": limit, "season": season},
         )
 
     def filters(self, name, category=None):

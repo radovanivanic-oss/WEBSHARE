@@ -899,8 +899,9 @@ def add_api_media(media):
                 int(media.get("episode_number") or 0),
             )
         )
-    label_parts.append("{} verzií".format(versions))
-    item = xbmcgui.ListItem(label="{} [{}]".format(title, " | ".join(label_parts)))
+    if media.get("media_type") == "movie":
+        label_parts.append("{} verzií".format(versions))
+    item = xbmcgui.ListItem(label="{} [{}]".format(title, " | ".join(label_parts)) if label_parts else title)
     info = {
         "title": title,
         "originaltitle": media.get("original_title") or "",
@@ -939,13 +940,7 @@ def api_media_detail(params):
     try:
         detail = catalog_api().detail(media_id) or {}
         if detail.get("media_type") == "tv":
-            response = catalog_api().episodes(media_id, page=page + 1, limit=page_size())
-            for episode in response.get("data", []):
-                add_api_media(episode)
-            pagination = response.get("pagination") or {}
-            add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_detail", params, page)
-            xbmcplugin.setContent(HANDLE, "episodes")
-            xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+            api_media_seasons(media_id, detail)
             return
         file_response = catalog_api().files(media_id, page=page + 1, limit=page_size())
         files = file_response.get("data", [])
@@ -977,6 +972,69 @@ def api_media_detail(params):
     pagination = file_response.get("pagination") or {}
     add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_detail", params, page)
     xbmcplugin.setContent(HANDLE, "episodes" if detail.get("media_type") == "episode" else "videos")
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def api_media_seasons(media_id, detail):
+    try:
+        response = catalog_api().seasons(media_id) or {}
+        seasons = response.get("data") or []
+    except CatalogApiError as exc:
+        notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
+        seasons = []
+
+    if not seasons:
+        api_media_season({"media_id": media_id})
+        return
+
+    for season in seasons:
+        season_number = int(season.get("season_number") or 0)
+        episode_count = int(season.get("episode_count") or 0)
+        label = "Séria {:02d}".format(season_number) if season_number else "Séria ?"
+        if episode_count:
+            label = "{} ({} epizód)".format(label, episode_count)
+        item = xbmcgui.ListItem(label=label)
+        item.setInfo(
+            "video",
+            {
+                "title": label,
+                "tvshowtitle": detail.get("title") or "",
+                "season": season_number,
+                "mediatype": "season",
+            },
+        )
+        item.setArt(
+            {
+                "poster": detail.get("poster_url") or fallback_art(),
+                "thumb": detail.get("poster_url") or fallback_art(),
+                "fanart": detail.get("backdrop_url") or fallback_art(),
+            }
+        )
+        xbmcplugin.addDirectoryItem(
+            HANDLE,
+            addon_url({"action": "api_media_season", "media_id": media_id, "season": season_number}),
+            item,
+            isFolder=True,
+        )
+    xbmcplugin.setContent(HANDLE, "seasons")
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def api_media_season(params):
+    media_id = params.get("media_id")
+    season = params.get("season")
+    page = int(params.get("page", "0"))
+    try:
+        response = catalog_api().episodes(media_id, page=page + 1, limit=page_size(), season=season)
+    except CatalogApiError as exc:
+        notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+        return
+    for episode in response.get("data", []):
+        add_api_media(episode)
+    pagination = response.get("pagination") or {}
+    add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_season", params, page)
+    xbmcplugin.setContent(HANDLE, "episodes")
     xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
 
 
@@ -1815,6 +1873,7 @@ def router():
         "api_movies": api_movies_menu,
         "api_media": lambda: api_media(params),
         "api_media_detail": lambda: api_media_detail(params),
+        "api_media_season": lambda: api_media_season(params),
         "show_file_name": lambda: show_file_name(params),
         "search_ident": search_ident,
         "recent_searches": recent_searches,

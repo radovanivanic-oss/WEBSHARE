@@ -279,23 +279,45 @@ function createCatalogRepository(database, config) {
   function getEpisodes(tvshowId, params = {}) {
     const page = positiveInteger(params.page, 1);
     const limit = Math.min(config.apiMaxPageSize, positiveInteger(params.limit, 50));
+    const values = [tvshowId];
+    let seasonSql = "";
+    if (params.season !== undefined && params.season !== null && params.season !== "") {
+      seasonSql = "AND episode.season_number = ?";
+      values.push(positiveInteger(params.season, 0));
+    }
     const total = database.prepare(`
       SELECT COUNT(*) AS count FROM media episode
-      WHERE episode.tvshow_id = ? AND episode.is_active = 1
-    `).get(tvshowId).count;
+      WHERE episode.tvshow_id = ? AND episode.is_active = 1 ${seasonSql}
+    `).get(...values).count;
     const rows = database.prepare(`
       SELECT episode.*, (
         SELECT COUNT(*) FROM files f
         WHERE f.media_id = episode.id AND f.is_active = 1 AND f.is_playable_video = 1
       ) AS version_count
       FROM media episode
-      WHERE episode.tvshow_id = ? AND episode.is_active = 1
+      WHERE episode.tvshow_id = ? AND episode.is_active = 1 ${seasonSql}
       ORDER BY episode.season_number, episode.episode_number, episode.id
       LIMIT ? OFFSET ?
-    `).all(tvshowId, limit, (page - 1) * limit);
+    `).all(...values, limit, (page - 1) * limit);
     return {
       data: rows.map(serializeMedia),
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    };
+  }
+
+  function getSeasons(tvshowId) {
+    const rows = database.prepare(`
+      SELECT episode.season_number AS season_number, COUNT(*) AS episode_count
+      FROM media episode
+      WHERE episode.tvshow_id = ? AND episode.is_active = 1 AND episode.season_number IS NOT NULL
+      GROUP BY episode.season_number
+      ORDER BY episode.season_number
+    `).all(tvshowId);
+    return {
+      data: rows.map((row) => ({
+        season_number: row.season_number,
+        episode_count: row.episode_count,
+      })),
     };
   }
 
@@ -376,7 +398,7 @@ function createCatalogRepository(database, config) {
     };
   }
 
-  return { categories, distinctFilter, genres, getEpisodes, getMedia, getMediaFiles, health, languages, listMedia };
+  return { categories, distinctFilter, genres, getEpisodes, getMedia, getMediaFiles, getSeasons, health, languages, listMedia };
 }
 
 module.exports = {

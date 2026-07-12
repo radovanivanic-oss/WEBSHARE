@@ -103,11 +103,14 @@ test("catalog API paginates, limits output and exposes versions without tokens",
   assert.equal(series.statusCode, 200);
   assert.equal(series.json().data.length, 1);
   assert.equal(series.json().data[0].media_type, "tv");
+  const seasons = await app.inject({ method: "GET", url: `/api/media/${series.json().data[0].id}/seasons` });
+  assert.equal(seasons.statusCode, 200);
+  assert.deepEqual(seasons.json().data, [{ season_number: 1, episode_count: 1 }]);
   const lightSeries = await app.inject({ method: "GET", url: "/api/media?category=series&light=1&limit=1" });
   assert.equal(lightSeries.statusCode, 200);
   assert.equal(lightSeries.json().pagination.total, null);
   assert.equal(lightSeries.json().pagination.has_more, false);
-  const episodes = await app.inject({ method: "GET", url: `/api/media/${series.json().data[0].id}/episodes` });
+  const episodes = await app.inject({ method: "GET", url: `/api/media/${series.json().data[0].id}/episodes?season=1` });
   assert.equal(episodes.statusCode, 200);
   assert.equal(episodes.json().data.length, 1);
   } finally {

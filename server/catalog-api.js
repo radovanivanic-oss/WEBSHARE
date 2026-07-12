@@ -118,6 +118,15 @@ function createCatalogApi(options = {}) {
     return repository.getEpisodes(id, request.query);
   });
 
+  app.get(`${base}/media/:id/seasons`, async (request, reply) => {
+    const id = Number.parseInt(request.params.id, 10);
+    if (!Number.isFinite(id) || id < 1) return reply.code(400).send({ error: "invalid_media_id" });
+    const media = repository.getMedia(id);
+    if (!media) return reply.code(404).send({ error: "media_not_found" });
+    if (media.media_type !== "tv") return reply.code(400).send({ error: "media_is_not_tvshow" });
+    return repository.getSeasons(id);
+  });
+
   app.get(`${base}/search`, async (request, reply) => {
     if (!String(request.query.q || "").trim()) return reply.code(400).send({ error: "missing_query" });
     return repository.listMedia({ ...request.query, query: request.query.q });
