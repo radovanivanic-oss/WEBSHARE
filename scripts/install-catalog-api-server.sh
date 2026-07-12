@@ -30,9 +30,24 @@ sudo install -m 0644 deploy/webshare-catalog-api.service /etc/systemd/system/web
 sudo install -m 0644 deploy/nginx-webshare-catalog-api.conf /etc/nginx/snippets/webshare-catalog-api.conf
 
 if ! sudo grep -q "snippets/webshare-catalog-api.conf" /etc/nginx/sites-available/default; then
-  echo "Do nginx server bloku treba pridať: include snippets/webshare-catalog-api.conf;" >&2
-  echo "Systemd súbor je pripravený, nginx konfiguráciu som automaticky neprepísal." >&2
-  exit 2
+  NGINX_DEFAULT="/etc/nginx/sites-available/default"
+  MARKER_COUNT="$(sudo grep -cE '^[[:space:]]*server_name[[:space:]]+_;[[:space:]]*$' "$NGINX_DEFAULT")"
+  if [[ "$MARKER_COUNT" != "1" ]]; then
+    echo "Nginx default server nemá jednoznačný server_name _; marker." >&2
+    exit 2
+  fi
+
+  NGINX_BACKUP="${NGINX_DEFAULT}.webshare-backup"
+  sudo cp "$NGINX_DEFAULT" "$NGINX_BACKUP"
+  sudo sed -i '/^[[:space:]]*server_name[[:space:]]\+_;[[:space:]]*$/a\
+\tinclude snippets/webshare-catalog-api.conf;' "$NGINX_DEFAULT"
+
+  if ! sudo nginx -t; then
+    sudo cp "$NGINX_BACKUP" "$NGINX_DEFAULT"
+    echo "Nginx konfigurácia neprešla kontrolou; pôvodný súbor bol obnovený." >&2
+    exit 2
+  fi
+  sudo rm -f "$NGINX_BACKUP"
 fi
 
 sudo systemctl daemon-reload
