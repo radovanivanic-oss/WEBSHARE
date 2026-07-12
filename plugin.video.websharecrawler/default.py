@@ -940,7 +940,13 @@ def api_media_detail(params):
     try:
         detail = catalog_api().detail(media_id) or {}
         if detail.get("media_type") == "tv":
-            api_media_seasons(media_id, detail)
+            live_metadata = {}
+            try:
+                live_metadata = catalog_api().metadata(media_id) or {}
+            except CatalogApiError:
+                live_metadata = {}
+            meta = api_detail_meta(detail, live_metadata)
+            api_media_seasons(media_id, detail, meta)
             return
         file_response = catalog_api().files(media_id, page=page + 1, limit=page_size())
         files = file_response.get("data", [])
@@ -953,6 +959,16 @@ def api_media_detail(params):
         live_metadata = catalog_api().metadata(media_id) or {}
     except CatalogApiError:
         live_metadata = {}
+    meta = api_detail_meta(detail, live_metadata)
+    for file_row in files:
+        add_api_file(file_row, detail, meta)
+    pagination = file_response.get("pagination") or {}
+    add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_detail", params, page)
+    xbmcplugin.setContent(HANDLE, "episodes" if detail.get("media_type") == "episode" else "videos")
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def api_detail_meta(detail, live_metadata):
     meta = {
         "title": detail.get("title") or "",
         "original_title": detail.get("original_title") or "",
@@ -966,16 +982,11 @@ def api_media_detail(params):
         "poster": live_metadata.get("posterUrl") or detail.get("poster_url") or "",
         "backdrop": live_metadata.get("backdropUrl") or detail.get("backdrop_url") or "",
     }
-    meta = enrich_api_meta_from_tmdb_id(detail, meta)
-    for file_row in files:
-        add_api_file(file_row, detail, meta)
-    pagination = file_response.get("pagination") or {}
-    add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_detail", params, page)
-    xbmcplugin.setContent(HANDLE, "episodes" if detail.get("media_type") == "episode" else "videos")
-    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+    return enrich_api_meta_from_tmdb_id(detail, meta)
 
 
-def api_media_seasons(media_id, detail):
+def api_media_seasons(media_id, detail, meta=None):
+    meta = meta or api_detail_meta(detail, {})
     try:
         response = catalog_api().seasons(media_id) or {}
         seasons = response.get("data") or []
@@ -994,22 +1005,33 @@ def api_media_seasons(media_id, detail):
         if episode_count:
             label = "{} ({} epizód)".format(label, episode_count)
         item = xbmcgui.ListItem(label=label)
+        plot = meta.get("overview") or "Popis seriálu nie je dostupný."
+        genres = safe_text_list(meta.get("genres"))
+        countries = safe_text_list(meta.get("countries"))
         item.setInfo(
             "video",
             {
                 "title": label,
                 "tvshowtitle": detail.get("title") or "",
+                "plot": plot,
+                "plotoutline": plot,
+                "year": safe_int(meta.get("year") or detail.get("year")),
+                "genre": ", ".join(genres),
+                "rating": safe_float(meta.get("rating")),
+                "country": ", ".join(countries),
                 "season": season_number,
                 "mediatype": "season",
             },
         )
         item.setArt(
             {
-                "poster": detail.get("poster_url") or fallback_art(),
-                "thumb": detail.get("poster_url") or fallback_art(),
-                "fanart": detail.get("backdrop_url") or fallback_art(),
+                "poster": meta.get("poster") or detail.get("poster_url") or fallback_art(),
+                "thumb": meta.get("poster") or detail.get("poster_url") or fallback_art(),
+                "fanart": meta.get("backdrop") or detail.get("backdrop_url") or fallback_art(),
             }
         )
+        item.setProperty("plot", plot)
+        item.setProperty("description", plot)
         xbmcplugin.addDirectoryItem(
             HANDLE,
             addon_url({"action": "api_media_season", "media_id": media_id, "season": season_number}),
@@ -1041,7 +1063,7 @@ def api_media_season(params):
 def enrich_api_meta_from_tmdb_id(detail, meta):
     if safe_text(meta.get("overview")):
         return meta
-    if detail.get("external_source") != "tmdb" or detail.get("media_type") != "movie":
+    if detail.get("external_source") != "tmdb" or detail.get("media_type") not in ("movie", "tv"):
         return meta
     external_id = safe_text(detail.get("external_id"))
     if not external_id.isdigit():
@@ -1056,7 +1078,10 @@ def enrich_api_meta_from_tmdb_id(detail, meta):
     if not client.enabled():
         return meta
 
-    data = client.fetch_movie_by_id(external_id)
+    if detail.get("media_type") == "tv":
+        data = client.fetch_tv_by_id(external_id)
+    else:
+        data = client.fetch_movie_by_id(external_id)
     if not data:
         return meta
 

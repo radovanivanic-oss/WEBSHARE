@@ -161,6 +161,50 @@ class TMDbClient(object):
             "language": details.get("_overview_language") or details.get("_language") or self.languages()[0],
         }
 
+    def fetch_tv_by_id(self, tv_id):
+        if not self.enabled() or not tv_id:
+            return None
+
+        detail_rows = []
+        for language in self.languages():
+            details = self._tv_details(tv_id, language)
+            if details:
+                details["_language"] = language
+                detail_rows.append(details)
+
+        if not detail_rows:
+            return None
+
+        details = detail_rows[0]
+        for fallback_details in detail_rows[1:]:
+            details = _merge_details(details, fallback_details)
+
+        countries = [
+            item.get("name") or item.get("iso_3166_1")
+            for item in details.get("production_countries", [])
+            if item.get("name") or item.get("iso_3166_1")
+        ] or [country for country in details.get("origin_country", []) if country]
+        genres = [item.get("name") for item in details.get("genres", []) if item.get("name")]
+        creators = [item.get("name") for item in details.get("created_by", []) if item.get("name")]
+        runtime_values = [value for value in details.get("episode_run_time", []) if value]
+
+        return {
+            "tmdb_id": details.get("id"),
+            "title": details.get("name") or "",
+            "original_title": details.get("original_name") or "",
+            "year": _year(details.get("first_air_date")),
+            "overview": details.get("overview") or "",
+            "genres": genres,
+            "rating": details.get("vote_average") or 0,
+            "runtime": runtime_values[0] if runtime_values else 0,
+            "countries": countries,
+            "director": ", ".join(creators),
+            "cast": [],
+            "poster": _image(details.get("poster_path"), "w500"),
+            "backdrop": _image(details.get("backdrop_path"), "w1280"),
+            "language": details.get("_overview_language") or details.get("_language") or self.languages()[0],
+        }
+
     def languages(self):
         result = []
         for language in (
@@ -204,6 +248,15 @@ class TMDbClient(object):
         except Exception:
             return None
 
+    def _tv_details(self, tv_id, language):
+        try:
+            return self._get(
+                "/tv/{}".format(tv_id),
+                {"language": language},
+            )
+        except Exception:
+            return None
+
 
 def _image(path, size):
     if not path:
@@ -222,13 +275,17 @@ def _merge_details(primary, fallback):
         "poster_path",
         "backdrop_path",
         "runtime",
+        "episode_run_time",
         "release_date",
+        "first_air_date",
         "original_title",
+        "original_name",
         "title",
+        "name",
     ):
         if not merged.get(key) and fallback.get(key):
             merged[key] = fallback[key]
-    for key in ("genres", "production_countries", "credits"):
+    for key in ("genres", "production_countries", "origin_country", "created_by", "credits"):
         if not merged.get(key) and fallback.get(key):
             merged[key] = fallback[key]
     return merged

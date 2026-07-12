@@ -3,7 +3,7 @@
 <addon
   id="plugin.video.websharecrawler"
   name="Webshare Atlas"
-  version="0.8.5"
+  version="0.8.6"
   provider-name="Radeco">
   <requires>
     <import addon="xbmc.python" version="3.0.0"/>
