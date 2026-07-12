@@ -19,6 +19,10 @@ function positiveInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function truthy(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").toLowerCase());
+}
+
 function escapeFtsQuery(value) {
   return String(value || "")
     .normalize("NFKD")
@@ -165,6 +169,7 @@ function createCatalogRepository(database, config) {
   function listMedia(params = {}) {
     const page = positiveInteger(params.page, 1);
     const limit = Math.min(config.apiMaxPageSize, positiveInteger(params.limit, 50));
+    const light = truthy(params.light);
     const order = params.sort === "release_date_desc"
       ? "DESC"
       : String(params.order || "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
@@ -177,8 +182,18 @@ function createCatalogRepository(database, config) {
     };
     const sortColumn = sortColumns[params.sort] || sortColumns.recent;
     const query = buildMediaQuery(params);
-    const total = database.prepare(`SELECT COUNT(*) AS count FROM media m WHERE ${query.where}`).get(...query.values).count;
+    const total = light
+      ? null
+      : database.prepare(`SELECT COUNT(*) AS count FROM media m WHERE ${query.where}`).get(...query.values).count;
+    const rowLimit = light ? limit + 1 : limit;
     const rows = database.prepare(`
+      WITH page_media AS (
+        SELECT m.id
+        FROM media m
+        WHERE ${query.where}
+        ORDER BY ${sortColumn} ${order}, m.id ${order}
+        LIMIT ? OFFSET ?
+      )
       SELECT m.*, CASE WHEN m.media_type = 'tv' THEN (
         SELECT COUNT(*) FROM media episode_media JOIN files episode_file ON episode_file.media_id = episode_media.id
         WHERE episode_media.tvshow_id = m.id AND episode_file.is_active = 1 AND episode_file.is_playable_video = 1
@@ -196,13 +211,20 @@ function createCatalogRepository(database, config) {
         LIMIT 1
       ) END AS best_quality
       FROM media m
-      WHERE ${query.where}
+      JOIN page_media ON page_media.id = m.id
       ORDER BY ${sortColumn} ${order}, m.id ${order}
-      LIMIT ? OFFSET ?
-    `).all(...query.values, limit, (page - 1) * limit);
+    `).all(...query.values, rowLimit, (page - 1) * limit);
+    const hasMore = light && rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
     return {
-      data: rows.map(serializeMedia),
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      data: pageRows.map(serializeMedia),
+      pagination: {
+        page,
+        limit,
+        total: light ? null : total,
+        pages: light ? page + (hasMore ? 1 : 0) : Math.ceil(total / limit),
+        has_more: light ? hasMore : page < Math.ceil(total / limit),
+      },
     };
   }
 
