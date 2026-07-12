@@ -130,6 +130,7 @@ test("movie news use release dates and metadata failures do not block files", as
   `);
   const newestId = Number(insertMedia.run("local:newest", "Newest Movie", 2025, "2025-05-10", now, now).lastInsertRowid);
   insertMedia.run("local:unknown-year", "Unknown Year", null, null, now, now);
+  insertMedia.run("local:future", "Future Movie", 2099, null, now, now);
 
   const metadataProvider = {
     async get(media) {
@@ -155,6 +156,7 @@ test("movie news use release dates and metadata failures do not block files", as
     assert.equal(listing.statusCode, 200);
     assert.deepEqual(listing.json().data.map((item) => item.title), ["Newest Movie", dune.title]);
     assert.equal(listing.json().data.some((item) => item.title === "Unknown Year"), false);
+    assert.equal(listing.json().data.some((item) => item.title === "Future Movie"), false);
     const duneListing = listing.json().data.find((item) => item.id === dune.id);
     assert.equal(duneListing.external_id, "693134");
     assert.equal(duneListing.external_url, "https://www.themoviedb.org/movie/693134");
