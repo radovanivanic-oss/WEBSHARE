@@ -356,8 +356,13 @@ def api_root_menu():
 
 def api_movies_menu():
     add_directory("Novinky", "api_media", {"category": "movies", "sort": "release_date_desc"})
+    add_directory("Najnovšie pridané", "api_media", {"category": "movies", "sort": "recent", "order": "desc"})
     add_directory("Všetky filmy", "api_media", {"category": "movies", "sort": "title", "order": "asc"})
     add_directory("Najlepšie hodnotené", "api_media", {"category": "movies", "sort": "rating", "order": "desc"})
+    add_directory("Roky", "api_years", {"category": "movies"})
+    add_directory("Žánre", "api_genres", {"category": "movies"})
+    add_directory("Kvalita", "api_quality", {"category": "movies"})
+    add_directory("Dabing / titulky", "api_languages", {"category": "movies"})
     add_command("Hľadať film", "api_search", {"category": "movies"})
     xbmcplugin.endOfDirectory(HANDLE)
 
@@ -366,8 +371,48 @@ def api_series_menu():
     add_directory("Novinky", "api_media", {"category": "series", "sort": "recent", "order": "desc"})
     add_directory("Všetky seriály", "api_media", {"category": "series", "sort": "title", "order": "asc"})
     add_directory("Najlepšie hodnotené", "api_media", {"category": "series", "sort": "rating", "order": "desc"})
+    add_directory("Roky", "api_years", {"category": "series"})
+    add_directory("Žánre", "api_genres", {"category": "series"})
+    add_directory("Kvalita", "api_quality", {"category": "series"})
+    add_directory("Dabing / titulky", "api_languages", {"category": "series"})
     add_command("Hľadať seriál", "api_search", {"category": "series"})
     xbmcplugin.endOfDirectory(HANDLE)
+
+
+def api_filter_menu(params, filter_name, param_key):
+    category = params.get("category")
+    try:
+        rows = catalog_api().filters(filter_name, category)
+    except CatalogApiError as exc:
+        notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+        return
+
+    for row in rows:
+        value = row.get("value")
+        if value in (None, ""):
+            continue
+        label = str(value)
+        if row.get("count") is not None:
+            label = "{} ({})".format(label, row.get("count"))
+        add_directory(label, "api_media", {"category": category, param_key: value, "sort": "recent", "order": "desc"})
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def api_years_menu(params):
+    api_filter_menu(params, "years", "year")
+
+
+def api_genres_menu(params):
+    api_filter_menu(params, "genres", "genre")
+
+
+def api_quality_menu(params):
+    api_filter_menu(params, "qualities", "quality")
+
+
+def api_languages_menu(params):
+    api_filter_menu(params, "languages", "language")
 
 
 def add_home_item(item_key, hidden, label, action, query=None):
@@ -1905,6 +1950,10 @@ def router():
         "api_search": lambda: api_search(params),
         "api_movies": api_movies_menu,
         "api_series": api_series_menu,
+        "api_years": lambda: api_years_menu(params),
+        "api_genres": lambda: api_genres_menu(params),
+        "api_quality": lambda: api_quality_menu(params),
+        "api_languages": lambda: api_languages_menu(params),
         "api_media": lambda: api_media(params),
         "api_media_detail": lambda: api_media_detail(params),
         "api_media_season": lambda: api_media_season(params),
