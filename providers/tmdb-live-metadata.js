@@ -20,6 +20,19 @@ function cacheKey(media, languages) {
     .digest("hex");
 }
 
+function titleCacheId(media) {
+  return `${media.media_type}:${media.id || ""}:${String(media.title || "").trim().toLowerCase()}`;
+}
+
+function normalizeTitle(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function imageUrl(path, size) {
   return path ? `${TMDB_IMAGE_BASE_URL}/${size}${path}` : null;
 }
@@ -47,7 +60,7 @@ function mergeDetails(primary, fallback) {
   if (!primary) return fallback;
   if (!fallback) return primary;
   const result = { ...primary };
-  for (const key of ["overview", "poster_path", "backdrop_path", "runtime", "vote_average", "genres"]) {
+  for (const key of ["overview", "poster_path", "backdrop_path", "runtime", "episode_run_time", "vote_average", "genres"]) {
     if ((!result[key] || (Array.isArray(result[key]) && result[key].length === 0)) && fallback[key]) {
       result[key] = fallback[key];
     }
@@ -60,7 +73,8 @@ function serializeDetails(media, details, language) {
   const overview = String(details.overview || "").trim() || null;
   const posterUrl = imageUrl(details.poster_path, "w500");
   const backdropUrl = imageUrl(details.backdrop_path, "w1280");
-  const available = Boolean(overview || posterUrl || backdropUrl || genres.length || details.runtime || details.vote_average);
+  const runtime = details.runtime || (Array.isArray(details.episode_run_time) ? details.episode_run_time.find(Boolean) : null);
+  const available = Boolean(overview || posterUrl || backdropUrl || genres.length || runtime || details.vote_average);
   return {
     available,
     metadataAvailable: available,
@@ -71,7 +85,7 @@ function serializeDetails(media, details, language) {
     posterUrl,
     backdropUrl,
     genres,
-    runtimeMinutes: Number.isFinite(Number(details.runtime)) && Number(details.runtime) > 0 ? Number(details.runtime) : null,
+    runtimeMinutes: Number.isFinite(Number(runtime)) && Number(runtime) > 0 ? Number(runtime) : null,
     rating: Number.isFinite(Number(details.vote_average)) && Number(details.vote_average) > 0 ? Number(details.vote_average) : null,
     language,
     message: overview ? null : "Popis nie je k dispozícii.",
@@ -145,15 +159,20 @@ class TmdbLiveMetadata {
   }
 
   async get(media) {
-    if (media.external_source !== "tmdb" || !/^\d+$/.test(String(media.external_id || ""))) {
-      return unavailable(media, "external_id_missing");
-    }
     if (!new Set(["movie", "tv"]).has(media.media_type)) {
       return unavailable(media, "unsupported_media_type");
     }
 
     const languages = this.languages();
-    const key = cacheKey(media, languages);
+    const hasExternalId = media.external_source === "tmdb" && /^\d+$/.test(String(media.external_id || ""));
+    if (!hasExternalId && media.media_type !== "tv") {
+      return unavailable(media, "external_id_missing");
+    }
+
+    const cacheMedia = hasExternalId
+      ? media
+      : { ...media, external_source: "tmdb_search", external_id: titleCacheId(media) };
+    const key = cacheKey(cacheMedia, languages);
     const now = new Date().toISOString();
     const cached = this.getCache.get(key);
     if (cached && cached.expires_at > now) {
@@ -164,12 +183,27 @@ class TmdbLiveMetadata {
       return stale || unavailable(media, "metadata_disabled");
     }
 
-    const endpoint = media.media_type === "tv" ? `/tv/${media.external_id}` : `/movie/${media.external_id}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.config.tmdbLiveTotalTimeoutMs);
     let merged = null;
     let selectedLanguage = languages[0] || "sk-SK";
     try {
+      const lookupMedia = hasExternalId ? media : await this.findTvShow(media, languages, controller.signal);
+      if (!lookupMedia) {
+        this.writeCache(
+          key,
+          cacheMedia,
+          languages,
+          null,
+          "not_found",
+          "title_not_found",
+          3600000,
+          3600000
+        );
+        return unavailable(media, "title_not_found");
+      }
+
+      const endpoint = lookupMedia.media_type === "tv" ? `/tv/${lookupMedia.external_id}` : `/movie/${lookupMedia.external_id}`;
       for (const language of languages) {
         const response = await this.client.get(endpoint, {
           params: { api_key: this.config.tmdbApiKey, language },
@@ -184,10 +218,10 @@ class TmdbLiveMetadata {
           break;
         }
       }
-      const payload = serializeDetails(media, merged || {}, selectedLanguage);
+      const payload = serializeDetails(lookupMedia, merged || {}, selectedLanguage);
       this.writeCache(
         key,
-        media,
+        cacheMedia,
         languages,
         payload,
         "ok",
@@ -202,12 +236,44 @@ class TmdbLiveMetadata {
       if (stale) return stale;
       const status = kind === "not_found" ? "not_found" : kind === "INVALID_RESPONSE" ? "invalid_response" : "temporary_error";
       const ttl = kind === "not_found" ? 3600000 : this.config.tmdbLiveErrorTtlMinutes * 60000;
-      this.writeCache(key, media, languages, null, status, kind, ttl, ttl);
+      this.writeCache(key, cacheMedia, languages, null, status, kind, ttl, ttl);
       this.logger.warn?.({ status: error.response?.status || null, code: error.code || null }, "TMDb live metadata unavailable");
       return unavailable(media, kind);
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  async findTvShow(media, languages, signal) {
+    const query = String(media.title || "").trim();
+    if (!query) return null;
+
+    const normalizedQuery = normalizeTitle(query);
+    for (const language of languages) {
+      const response = await this.client.get("/search/tv", {
+        params: {
+          api_key: this.config.tmdbApiKey,
+          query,
+          language,
+          include_adult: "false",
+          first_air_date_year: media.year || undefined,
+        },
+        signal,
+      });
+      const results = Array.isArray(response.data?.results) ? response.data.results : [];
+      if (!results.length) continue;
+      const exact = results.find((item) => normalizeTitle(item.name || item.original_name) === normalizedQuery);
+      const selected = exact || results[0];
+      if (selected?.id) {
+        return {
+          ...media,
+          external_source: "tmdb",
+          external_id: String(selected.id),
+          external_url: `https://www.themoviedb.org/tv/${selected.id}`,
+        };
+      }
+    }
+    return null;
   }
 }
 
@@ -216,6 +282,8 @@ module.exports = {
   cacheKey,
   errorKind,
   mergeDetails,
+  normalizeTitle,
   serializeDetails,
+  titleCacheId,
   unavailable,
 };
