@@ -336,8 +336,8 @@ def api_root_menu():
     add_command("[B]Rýchle hľadanie seriálov[/B]", "api_search", {"category": "series"})
     add_command("Vyhľadávanie", "api_search")
     add_directory("Filmy", "api_movies")
+    add_directory("Seriály", "api_series")
     for label, category in (
-        ("Seriály", "series"),
         ("Dokumentárne", "documentaries"),
         ("Koncerty", "concerts"),
         ("Anime", "anime"),
@@ -359,6 +359,14 @@ def api_movies_menu():
     add_directory("Všetky filmy", "api_media", {"category": "movies", "sort": "title", "order": "asc"})
     add_directory("Najlepšie hodnotené", "api_media", {"category": "movies", "sort": "rating", "order": "desc"})
     add_command("Hľadať film", "api_search", {"category": "movies"})
+    xbmcplugin.endOfDirectory(HANDLE)
+
+
+def api_series_menu():
+    add_directory("Novinky", "api_media", {"category": "series", "sort": "recent", "order": "desc"})
+    add_directory("Všetky seriály", "api_media", {"category": "series", "sort": "title", "order": "asc"})
+    add_directory("Najlepšie hodnotené", "api_media", {"category": "series", "sort": "rating", "order": "desc"})
+    add_command("Hľadať seriál", "api_search", {"category": "series"})
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -1896,6 +1904,7 @@ def router():
         "search": lambda: search(params),
         "api_search": lambda: api_search(params),
         "api_movies": api_movies_menu,
+        "api_series": api_series_menu,
         "api_media": lambda: api_media(params),
         "api_media_detail": lambda: api_media_detail(params),
         "api_media_season": lambda: api_media_season(params),
