@@ -925,7 +925,7 @@ def api_media(params):
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
 
-    for media in response.get("data", []):
+    for media in hydrate_api_listing_metadata(response.get("data", [])):
         add_api_media(media)
     pagination = response.get("pagination") or {}
     has_more = bool(pagination.get("has_more")) if "has_more" in pagination else page + 1 < int(pagination.get("pages") or 0)
@@ -938,6 +938,37 @@ def api_page_size(category):
     if category in (None, "", "movies"):
         return page_size()
     return min(page_size(), 20)
+
+
+def hydrate_api_listing_metadata(items):
+    hydrated = []
+    for media in items or []:
+        if media.get("media_type") != "tv":
+            hydrated.append(media)
+            continue
+        if safe_text(media.get("overview")):
+            hydrated.append(media)
+            continue
+
+        enriched = dict(media)
+        live_metadata = {}
+        try:
+            live_metadata = catalog_api().metadata(media.get("id")) or {}
+        except CatalogApiError:
+            live_metadata = {}
+        meta = api_detail_meta(media, live_metadata)
+        if safe_text(meta.get("overview")):
+            enriched["overview"] = meta.get("overview")
+        if meta.get("genres"):
+            enriched["genres"] = meta.get("genres")
+        if meta.get("rating"):
+            enriched["rating"] = meta.get("rating")
+        if meta.get("poster"):
+            enriched["poster_url"] = meta.get("poster")
+        if meta.get("backdrop"):
+            enriched["backdrop_url"] = meta.get("backdrop")
+        hydrated.append(enriched)
+    return hydrated
 
 
 def add_api_media(media):
@@ -959,6 +990,7 @@ def add_api_media(media):
         "title": title,
         "originaltitle": media.get("original_title") or "",
         "plot": media.get("overview") or "",
+        "plotoutline": media.get("overview") or "",
         "year": int(year or 0),
         "genre": ", ".join(
             [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in media.get("genres") or []]
