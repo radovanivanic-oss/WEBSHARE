@@ -119,11 +119,13 @@ function createCatalogRepository(database, config) {
   function buildMediaQuery(params = {}) {
     const where = ["m.is_active = 1"];
     const values = [];
+    const seriesListing = params.category === "series" && !params.type;
     if (params.category) {
       where.push("m.category = ?");
       values.push(params.category);
-      if (params.category === "series" && !params.type) {
+      if (seriesListing) {
         where.push("m.media_type = 'tv'");
+        where.push("m.metadata_confidence >= 0.5");
       }
     }
     if (params.type) {
@@ -139,14 +141,31 @@ function createCatalogRepository(database, config) {
       values.push(params.genre);
     }
     if (params.language) {
-      where.push(`EXISTS (
+      where.push(seriesListing ? `EXISTS (
+        SELECT 1 FROM media language_episode
+        JOIN files language_file ON language_file.media_id = language_episode.id,
+        json_each(language_file.parsed_languages_json) language
+        WHERE language_episode.tvshow_id = m.id
+          AND language_episode.is_active = 1
+          AND language_file.is_active = 1
+          AND upper(language.value) = upper(?)
+      )` : `EXISTS (
         SELECT 1 FROM files language_file, json_each(language_file.parsed_languages_json) language
         WHERE language_file.media_id = m.id AND language_file.is_active = 1 AND upper(language.value) = upper(?)
       )`);
       values.push(params.language);
     }
     if (params.quality) {
-      where.push("EXISTS (SELECT 1 FROM files quality_file WHERE quality_file.media_id = m.id AND quality_file.is_active = 1 AND quality_file.parsed_resolution = ?)");
+      where.push(seriesListing
+        ? `EXISTS (
+          SELECT 1 FROM media quality_episode
+          JOIN files quality_file ON quality_file.media_id = quality_episode.id
+          WHERE quality_episode.tvshow_id = m.id
+            AND quality_episode.is_active = 1
+            AND quality_file.is_active = 1
+            AND quality_file.parsed_resolution = ?
+        )`
+        : "EXISTS (SELECT 1 FROM files quality_file WHERE quality_file.media_id = m.id AND quality_file.is_active = 1 AND quality_file.parsed_resolution = ?)");
       values.push(params.quality);
     }
     if (params.sort === "release_date_desc") {
@@ -170,6 +189,7 @@ function createCatalogRepository(database, config) {
     const page = positiveInteger(params.page, 1);
     const limit = Math.min(config.apiMaxPageSize, positiveInteger(params.limit, 50));
     const light = truthy(params.light);
+    const seriesRecent = params.category === "series" && !params.type && (params.sort || "recent") === "recent";
     const order = params.sort === "release_date_desc"
       ? "DESC"
       : String(params.order || "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
@@ -180,16 +200,30 @@ function createCatalogRepository(database, config) {
       rating: "m.rating",
       release_date_desc: "COALESCE(m.release_date, printf('%04d-01-01', m.year))",
     };
-    const sortColumn = sortColumns[params.sort] || sortColumns.recent;
+    const sortColumn = seriesRecent ? "series_activity.latest_file_id" : sortColumns[params.sort] || sortColumns.recent;
     const query = buildMediaQuery(params);
     const total = light
       ? null
       : database.prepare(`SELECT COUNT(*) AS count FROM media m WHERE ${query.where}`).get(...query.values).count;
     const rowLimit = light ? limit + 1 : limit;
+    const seriesActivityCte = seriesRecent ? `
+      series_activity AS (
+        SELECT episode.tvshow_id AS id, MAX(file.id) AS latest_file_id
+        FROM media episode
+        JOIN files file ON file.media_id = episode.id
+        WHERE episode.tvshow_id IS NOT NULL
+          AND episode.is_active = 1
+          AND file.is_active = 1
+          AND file.is_playable_video = 1
+        GROUP BY episode.tvshow_id
+      ),
+    ` : "";
+    const seriesActivityJoin = seriesRecent ? "JOIN series_activity ON series_activity.id = m.id" : "";
     const rows = database.prepare(`
-      WITH page_media AS (
+      WITH ${seriesActivityCte} page_media AS (
         SELECT m.id
         FROM media m
+        ${seriesActivityJoin}
         WHERE ${query.where}
         ORDER BY ${sortColumn} ${order}, m.id ${order}
         LIMIT ? OFFSET ?
@@ -212,6 +246,7 @@ function createCatalogRepository(database, config) {
       ) END AS best_quality
       FROM media m
       JOIN page_media ON page_media.id = m.id
+      ${seriesActivityJoin}
       ORDER BY ${sortColumn} ${order}, m.id ${order}
     `).all(...query.values, rowLimit, (page - 1) * limit);
     const hasMore = light && rows.length > limit;
