@@ -26,6 +26,7 @@ if [ -f server/catalog-api.js ]; then
   node --check scripts/reclassify-catalog.js
   node --check scripts/update-catalog-database.js
   node --check scripts/create-catalog-manifest.js
+  node --check lib/catalog-safety.js
 fi
 
 echo "Deploy OK"

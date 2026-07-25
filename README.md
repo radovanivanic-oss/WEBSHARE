@@ -88,8 +88,11 @@ node main.js
 Spúšťanie 2× denne:
 
 ```cron
-0 8,20 * * * cd /home/radeco/webshare-crawler && set -a && . ./.env && set +a && /usr/bin/node main.js >> runtime/cron.log 2>&1
+0 8,20 * * * /usr/bin/bash /home/radeco/webshare-crawler/scripts/run-crawler-and-update.sh >> /home/radeco/webshare-crawler/runtime/cron.log 2>&1
 ```
+
+Wrapper používa `flock`, vykoná preflight kontrolu Node.js a `.env` a nespustí druhý
+súbežný crawl/update. Volanie cez `/usr/bin/bash` nezávisí od execute bitu skriptu.
 
 Crawler je oddelený od trading bota:
 
@@ -133,7 +136,7 @@ Základné príkazy:
 
 ```bash
 npm run db:migrate
-npm run catalog:import -- --input runtime/catalog-items.jsonl --full
+npm run catalog:import -- --input runtime/catalog-items.jsonl
 npm run metadata:enrich -- --limit 1000
 npm run catalog:reclassify
 npm run api:start
@@ -144,6 +147,17 @@ Celý bezpečný crawler + SQLite update tok na Ubuntu:
 ```bash
 bash scripts/run-crawler-and-update.sh
 ```
+
+## Production safety guardrail
+
+Aktuálna prefixová stratégia ešte nedokáže formálne potvrdiť úplnosť. Crawler preto
+vytvára manifest `run_status: incomplete`, `is_full: false` a
+`reconciliation_safe: false`. Automatický update je iba inkrementálny a nikdy
+nezneaktívni staršie súbory.
+
+Full reconciliation je fail-closed a vyžaduje samostatne overený manifest,
+`--allow-deactivation` aj `CATALOG_ALLOW_FULL_RECONCILIATION=true`. Tento prepínač
+má v produkčnom `.env` zostať `false`, kým Fáza B nepotvrdí úplnosť crawlu.
 
 API štandardne počúva iba na `127.0.0.1:8787` a je určené pre nginx reverse proxy cez `/api/`.
 Podrobná architektúra a bezpečné nasadenie sú v `docs/CATALOG-SERVER.md`.

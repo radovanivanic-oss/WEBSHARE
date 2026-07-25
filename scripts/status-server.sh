@@ -19,6 +19,10 @@ else
 fi
 
 echo
+echo "== runtime log sizes =="
+find "$PROJECT_DIR/runtime" -maxdepth 1 -type f -name '*.log' -printf '%f %s bytes\n' | sort
+
+echo
 echo "== $HEALTH_PATH =="
 if [ -f "$HEALTH_PATH" ]; then
   cat "$HEALTH_PATH"

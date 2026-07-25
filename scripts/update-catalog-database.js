@@ -2,6 +2,11 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const {
+  canRunFullReconciliation,
+  isFullReconciliationEnabled,
+  loadAndValidateCatalogManifest,
+} = require("../lib/catalog-safety");
 const { getCatalogConfig } = require("../src/config/catalog-config");
 
 function runNode(script, args) {
@@ -22,12 +27,8 @@ function main() {
   if (fs.existsSync(lockPath)) throw new Error("Crawler práve beží; databázový import sa nespustí.");
   if (!fs.existsSync(inputPath)) throw new Error(`Chýba ${inputPath}.`);
   if (!fs.existsSync(manifestPath)) throw new Error(`Chýba ${manifestPath}.`);
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  if (!manifest.success) throw new Error("Crawler manifest nie je úspešný.");
   const inputStat = fs.statSync(inputPath);
-  if (Number(manifest.source_size) !== inputStat.size) {
-    throw new Error("JSONL sa nezhoduje s úspešným crawl manifestom.");
-  }
+  const manifest = loadAndValidateCatalogManifest(manifestPath, inputPath, inputStat);
 
   const importArgs = [
     "--input", inputPath,
@@ -35,8 +36,21 @@ function main() {
     "--manifest", manifestPath,
     "--batch-size", String(config.importBatchSize),
   ];
-  if (manifest.is_full) importArgs.push("--full");
-  else console.warn("Crawl obsahuje failed prefixes; import bude inkrementálny bez deaktivácie starých súborov.");
+  const reconciliationAllowed = canRunFullReconciliation(manifest);
+  if (reconciliationAllowed) {
+    importArgs.push("--full", "--allow-deactivation");
+    console.warn("POZOR: povolený full reconciliation môže deaktivovať súbory nevidené v tomto behu.");
+  } else {
+    console.warn(
+      "SAFETY: import bude inkrementálny bez deaktivácie starých súborov.",
+      JSON.stringify({
+        run_status: manifest.run_status || "legacy_or_unknown",
+        reconciliation_safe: manifest.reconciliation_safe === true,
+        is_full: manifest.is_full === true,
+        full_reconciliation_env: isFullReconciliationEnabled(),
+      })
+    );
+  }
 
   runNode(path.join("scripts", "import-catalog-jsonl.js"), importArgs);
   runNode(path.join("scripts", "reclassify-catalog.js"), []);

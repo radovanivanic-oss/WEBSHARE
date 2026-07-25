@@ -1,0 +1,12 @@
+/home/radeco/webshare-crawler/runtime/*.log {
+    daily
+    maxsize 100M
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su radeco radeco
+    create 0640 radeco radeco
+}

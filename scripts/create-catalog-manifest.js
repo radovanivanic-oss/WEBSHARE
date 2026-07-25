@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
+const {
+  FULL_RECONCILIATION_ENV,
+  buildManuallyConfirmedManifest,
+  isFullReconciliationEnabled,
+} = require("../lib/catalog-safety");
 const { getCatalogConfig } = require("../src/config/catalog-config");
 
 function argument(name) {
@@ -12,6 +17,12 @@ function main() {
   if (!process.argv.includes("--confirmed-full")) {
     throw new Error("Manifest možno vytvoriť iba s explicitným --confirmed-full.");
   }
+  if (!process.argv.includes("--allow-deactivation")) {
+    throw new Error("Bezpečný full manifest vyžaduje aj --allow-deactivation.");
+  }
+  if (!isFullReconciliationEnabled()) {
+    throw new Error(`Bezpečný full manifest vyžaduje ${FULL_RECONCILIATION_ENV}=true.`);
+  }
   const items = Number.parseInt(argument("--items"), 10);
   if (!Number.isFinite(items) || items < 1) {
     throw new Error("Chýba platný --items počet.");
@@ -22,17 +33,7 @@ function main() {
   const lockPath = path.join(config.runtimeDir, "webshare-crawler.lock");
   if (fs.existsSync(lockPath)) throw new Error("Crawler práve beží.");
   const stat = fs.statSync(inputPath);
-  const manifest = {
-    success: true,
-    is_full: true,
-    generated_at: new Date().toISOString(),
-    source_path: inputPath,
-    source_size: stat.size,
-    source_mtime_ms: Math.trunc(stat.mtimeMs),
-    items,
-    failed_prefixes: 0,
-    manually_confirmed: true,
-  };
+  const manifest = buildManuallyConfirmedManifest({ inputPath, stat, items });
   fs.writeFileSync(`${manifestPath}.tmp`, `${JSON.stringify(manifest, null, 2)}\n`);
   fs.renameSync(`${manifestPath}.tmp`, manifestPath);
   console.log(manifestPath);

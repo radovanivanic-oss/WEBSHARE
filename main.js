@@ -12,6 +12,10 @@ const {
   normalizeBoolean,
   normalizeChunkSize,
 } = require("./lib/catalog-exporter");
+const {
+  RUN_STATUSES,
+  buildUnverifiedCrawlerManifest,
+} = require("./lib/catalog-safety");
 
 const execFileAsync = util.promisify(execFile);
 
@@ -670,12 +674,16 @@ function buildHealthReport({
   videos,
   durationSeconds,
   phase = success ? "done" : "failed",
+  operation = "crawl",
+  runStatus = null,
   catalog = null,
   classification = null,
 }) {
   const report = {
     success,
     phase,
+    operation,
+    run_status: runStatus,
     generated_at: new Date().toISOString(),
     videos,
     duration_seconds: durationSeconds,
@@ -1324,18 +1332,17 @@ async function cleanupIntermediateArtifacts(config, logger) {
 async function writeCatalogSourceManifest(config, finalCount, logger) {
   const failedPrefixes = await loadFailedPrefixes(config.failedPrefixesPath, logger);
   const stat = await fsPromises.stat(config.catalogJsonlPath);
-  const manifest = {
-    success: true,
-    is_full: failedPrefixes.length === 0,
-    generated_at: new Date().toISOString(),
-    source_path: config.catalogJsonlPath,
-    source_size: stat.size,
-    source_mtime_ms: Math.trunc(stat.mtimeMs),
+  const manifest = buildUnverifiedCrawlerManifest({
+    inputPath: config.catalogJsonlPath,
+    stat,
     items: finalCount,
-    failed_prefixes: failedPrefixes.length,
-  };
+    failedPrefixes: failedPrefixes.length,
+  });
   await writeJsonAtomically(config.catalogSourceManifestPath, manifest);
-  logger.info("Zapísaný manifest surového katalógu.", manifest);
+  logger.warn(
+    "Zapísaný manifest surového katalógu. Full reconciliation zostáva bezpečnostne zablokovaný.",
+    manifest
+  );
   return manifest;
 }
 
@@ -1588,6 +1595,7 @@ async function crawlAllVideos(config, logger, stats) {
       videos: state.uniqueItems || stats.uniqueItems,
       durationSeconds: getDurationSeconds(stats),
       phase: "classify",
+      runStatus: RUN_STATUSES.INCOMPLETE,
     })
   );
   const exportResult = await runCatalogExport(config, logger, stats);
@@ -1601,6 +1609,7 @@ async function crawlAllVideos(config, logger, stats) {
       videos: finalCount,
       durationSeconds: getDurationSeconds(stats),
       phase: "done",
+      runStatus: catalogSourceManifest.run_status,
       catalog: {
         manifestPath: exportResult.manifestPath,
         chunkSize: exportResult.chunkSize,
@@ -1641,6 +1650,7 @@ async function exportExistingCatalogOnly(config, logger, stats) {
       videos: 0,
       durationSeconds: getDurationSeconds(stats),
       phase: "classify",
+      operation: "export_only",
     })
   );
 
@@ -1654,6 +1664,7 @@ async function exportExistingCatalogOnly(config, logger, stats) {
       videos: finalCount,
       durationSeconds: getDurationSeconds(stats),
       phase: "done",
+      operation: "export_only",
       catalog: {
         manifestPath: exportResult.manifestPath,
         chunkSize: exportResult.chunkSize,
@@ -1759,6 +1770,9 @@ async function main() {
         success: false,
         videos: 0,
         durationSeconds: getDurationSeconds(stats),
+        phase: "failed",
+        runStatus: classifyOnly ? null : RUN_STATUSES.ABORTED,
+        operation: classifyOnly ? "export_only" : "crawl",
       })
     );
     process.exitCode = 1;

@@ -1,8 +1,12 @@
 #!/usr/bin/env node
-const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { buildCandidate } = require("../lib/candidate-grouper");
+const {
+  assertFullReconciliationAllowed,
+  fileFingerprint,
+  loadAndValidateCatalogManifest,
+} = require("../lib/catalog-safety");
 const { classifyMedia } = require("../lib/media-classifier");
 const { parseMediaName } = require("../lib/media-name-parser");
 const { getCatalogConfig } = require("../src/config/catalog-config");
@@ -10,11 +14,12 @@ const { nowIso, openCatalogDatabase } = require("../src/db/catalog-db");
 const { migrateDatabase } = require("../src/db/migrate");
 
 function parseArguments(argv) {
-  const result = { full: false, restart: false };
+  const result = { allowDeactivation: false, full: false, restart: false };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--full") result.full = true;
     else if (value === "--restart") result.restart = true;
+    else if (value === "--allow-deactivation") result.allowDeactivation = true;
     else if (value.startsWith("--")) {
       const key = value.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
       result[key] = argv[index + 1];
@@ -24,42 +29,15 @@ function parseArguments(argv) {
   return result;
 }
 
-function fileFingerprint(inputPath, stat) {
-  const descriptor = fs.openSync(inputPath, "r");
-  try {
-    const chunkSize = Math.min(65536, stat.size);
-    const first = Buffer.alloc(chunkSize);
-    const last = Buffer.alloc(chunkSize);
-    fs.readSync(descriptor, first, 0, chunkSize, 0);
-    fs.readSync(descriptor, last, 0, chunkSize, Math.max(0, stat.size - chunkSize));
-    return crypto
-      .createHash("sha256")
-      .update(String(stat.size))
-      .update(":")
-      .update(String(Math.trunc(stat.mtimeMs)))
-      .update(first)
-      .update(last)
-      .digest("hex");
-  } finally {
-    fs.closeSync(descriptor);
-  }
-}
-
 function validateFullManifest(options, inputPath, stat) {
   if (!options.full) return null;
   const manifestPath = path.resolve(
     options.manifest || path.join(path.dirname(inputPath), "catalog-items.manifest.json")
   );
-  if (!fs.existsSync(manifestPath)) {
-    throw new Error(`--full vyžaduje potvrdený manifest: ${manifestPath}`);
-  }
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  if (!manifest.success || !manifest.is_full) {
-    throw new Error(`Manifest nepotvrdzuje kompletný crawl: ${manifestPath}`);
-  }
-  if (Number(manifest.source_size) !== stat.size) {
-    throw new Error(`Veľkosť JSONL nesedí s manifestom: ${manifestPath}`);
-  }
+  const manifest = loadAndValidateCatalogManifest(manifestPath, inputPath, stat, {
+    requireCurrentSchema: true,
+  });
+  assertFullReconciliationAllowed(options, manifest, manifestPath);
   return manifest;
 }
 
@@ -188,7 +166,7 @@ function prepareStatements(database) {
   };
 }
 
-function rebuildDerivedCatalogData(database) {
+function rebuildCatalogIndexesAndCounts(database) {
   const rebuild = database.transaction(() => {
     database.prepare(`
       UPDATE candidates SET
@@ -202,6 +180,11 @@ function rebuildDerivedCatalogData(database) {
         COALESCE((SELECT GROUP_CONCAT(alias, ' ') FROM media_aliases WHERE media_id = media.id), '')
       FROM media
     `);
+  });
+  rebuild();
+}
+
+function rebuildMediaVisibility(database) {
     database.exec("UPDATE media SET is_active = 0;");
     database.exec(`
       UPDATE media SET is_active = 1 WHERE id IN (
@@ -217,6 +200,12 @@ function rebuildDerivedCatalogData(database) {
         WHERE episode.tvshow_id IS NOT NULL AND files.is_active = 1 AND files.is_playable_video = 1
       )
     `);
+}
+
+function rebuildDerivedCatalogData(database) {
+  rebuildCatalogIndexesAndCounts(database);
+  const rebuild = database.transaction(() => {
+    rebuildMediaVisibility(database);
   });
   rebuild();
 }
@@ -333,6 +322,9 @@ function createImportBatch(database, statements, context) {
 }
 
 function createOrResumeRun(database, inputPath, stat, fingerprint, options) {
+  const sourceManifest = options.sourceManifest
+    ? JSON.stringify(options.sourceManifest)
+    : JSON.stringify({ inputPath, fingerprint });
   if (!options.restart) {
     const existing = database.prepare(`
       SELECT * FROM import_runs
@@ -342,8 +334,10 @@ function createOrResumeRun(database, inputPath, stat, fingerprint, options) {
     if (existing) {
       database.prepare("UPDATE import_runs SET status = 'running', updated_at = ? WHERE id = ?")
         .run(nowIso(), existing.id);
-      database.prepare("UPDATE crawl_runs SET is_full = ?, status = 'running', updated_at = ? WHERE id = ?")
-        .run(options.full ? 1 : 0, nowIso(), existing.crawl_run_id);
+      database.prepare(`
+        UPDATE crawl_runs SET is_full = ?, status = 'running', source_manifest = ?, updated_at = ?
+        WHERE id = ?
+      `).run(options.full ? 1 : 0, sourceManifest, nowIso(), existing.crawl_run_id);
       return existing;
     }
   }
@@ -351,7 +345,7 @@ function createOrResumeRun(database, inputPath, stat, fingerprint, options) {
   const crawlRunId = database.prepare(`
     INSERT INTO crawl_runs(started_at, status, is_full, source_manifest, created_at, updated_at)
     VALUES (?, 'running', ?, ?, ?, ?)
-  `).run(now, options.full ? 1 : 0, JSON.stringify({ inputPath, fingerprint }), now, now).lastInsertRowid;
+  `).run(now, options.full ? 1 : 0, sourceManifest, now, now).lastInsertRowid;
   const importRunId = database.prepare(`
     INSERT INTO import_runs(
       crawl_run_id, input_path, input_size, input_mtime_ms, input_fingerprint,
@@ -368,7 +362,12 @@ async function importCatalog(options) {
   const batchSize = Number.parseInt(options.batchSize, 10) || config.importBatchSize;
   const errorPath = path.resolve(options.errorLog || path.join(config.runtimeDir, "catalog-import-errors.jsonl"));
   const stat = fs.statSync(inputPath);
-  validateFullManifest(options, inputPath, stat);
+  const sourceManifest = options.full
+    ? validateFullManifest(options, inputPath, stat)
+    : options.manifest
+      ? loadAndValidateCatalogManifest(path.resolve(options.manifest), inputPath, stat)
+      : null;
+  options.sourceManifest = sourceManifest;
   const fingerprint = fileFingerprint(inputPath, stat);
   fs.mkdirSync(path.dirname(errorPath), { recursive: true });
   const database = openCatalogDatabase(databasePath);
@@ -441,9 +440,28 @@ async function importCatalog(options) {
       return;
     }
 
+    if (options.full) {
+      if (invalidCount !== 0) {
+        throw new Error(
+          `Full reconciliation je zablokovaný: import obsahuje ${invalidCount} neplatných riadkov.`
+        );
+      }
+      if (lineNumber !== Number(sourceManifest.items)) {
+        throw new Error(
+          `Full reconciliation je zablokovaný: manifest očakáva ${sourceManifest.items} položiek, ` +
+          `ale import prečítal ${lineNumber} riadkov.`
+        );
+      }
+    }
+
     console.log("Prepočítavam počty verzií a obnovujem FTS index.");
-    rebuildDerivedCatalogData(database);
+    rebuildCatalogIndexesAndCounts(database);
     const finish = database.transaction(() => {
+      if (options.full) {
+        database.prepare("UPDATE files SET is_active = 0 WHERE last_seen_run_id != ? OR last_seen_run_id IS NULL")
+          .run(run.crawl_run_id);
+      }
+      rebuildMediaVisibility(database);
       database.prepare(`
         UPDATE import_runs SET status = 'completed', byte_offset = ?, line_number = ?,
           inserted_count = ?, updated_count = ?, invalid_count = ?, updated_at = ?, finished_at = ?
@@ -453,10 +471,6 @@ async function importCatalog(options) {
         UPDATE crawl_runs SET status = 'completed', finished_at = ?, items_seen = ?,
           errors_count = ?, updated_at = ? WHERE id = ?
       `).run(finishedAt, lineNumber, invalidCount, finishedAt, run.crawl_run_id);
-      if (options.full) {
-        database.prepare("UPDATE files SET is_active = 0 WHERE last_seen_run_id != ? OR last_seen_run_id IS NULL")
-          .run(run.crawl_run_id);
-      }
       database.prepare(`
         INSERT INTO app_state(key, value_json, updated_at) VALUES ('last_import', ?, ?)
         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
@@ -497,7 +511,9 @@ module.exports = {
   fileFingerprint,
   importCatalog,
   parseArguments,
+  rebuildCatalogIndexesAndCounts,
   rebuildDerivedCatalogData,
+  rebuildMediaVisibility,
   readJsonLines,
   validateFullManifest,
 };

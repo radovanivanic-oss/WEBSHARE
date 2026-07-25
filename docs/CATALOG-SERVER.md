@@ -59,31 +59,66 @@ node scripts/migrate-catalog.js --rollback
 
 Migrácie majú verziu a checksum. Už aplikovaný migračný súbor sa nesmie meniť. Pred produkčnou migráciou sa vytvorí timestampovaná SQLite záloha v `data/backups/`.
 
-## Import JSONL
+## Import JSONL a production safety guardrail
 
-Prvý potvrdený kompletný import:
+Bežný bezpečný import je inkrementálny:
 
 ```bash
 npm run catalog:import -- \
   --input runtime/catalog-items.jsonl \
   --database data/catalog.sqlite \
-  --batch-size 1000 \
-  --full
+  --batch-size 1000
 ```
 
 Import číta súbor po riadkoch, drží v RAM iba aktuálny batch, používa UPSERT podľa `ident`, zapisuje byte offset a číslo riadku a overuje fingerprint vstupu. Chybné riadky zapisuje do `runtime/catalog-import-errors.jsonl`.
 
-`--full` povoľuje označenie starých nevidených súborov ako neaktívne. Vykoná sa iba po úspešnom dočítaní celého vstupu. Pri neúplnom alebo prerušenom importe sa súbory hromadne nedeaktivujú. Bez `--full` je import inkrementálny.
+`--full` povoľuje označenie starých nevidených súborov ako neaktívne, preto je
+fail-closed. Vyžaduje naraz:
 
-Crawler pred ukončením vytvorí `runtime/catalog-items.manifest.json`. Ak niektoré prefixy zlyhali, manifest má `is_full: false` a databázový update automaticky použije iba inkrementálny režim.
+- manifest schémy 2 so zhodným size/fingerprint/count,
+- `run_status: complete`,
+- `reconciliation_safe: true`, `is_full: true` a nula failed prefixov,
+- CLI prepínače `--full --allow-deactivation`,
+- `CATALOG_ALLOW_FULL_RECONCILIATION=true`.
 
-Pre jednorazovú migráciu starého, už overeného kompletného JSONL možno manifest vytvoriť iba explicitným príkazom:
+Pred deaktiváciou musí byť počet neplatných riadkov nula a počet prečítaných
+riadkov sa musí zhodovať s `manifest.items`. Files a odvodené `media.is_active`
+sa potom zmenia v správnom poradí v jednej transakcii.
 
-```bash
-npm run catalog:create-manifest -- --confirmed-full --items 1639152
+Aktuálny crawler používa prefixovú stratégiu, ktorej úplnosť ešte nie je
+potvrdená. Aj bez failed prefixov preto vytvára:
+
+```json
+{
+  "run_status": "incomplete",
+  "is_full": false,
+  "reconciliation_safe": false,
+  "completeness_reason": "prefix_strategy_not_verified"
+}
 ```
 
-Bez `--confirmed-full` a platného počtu položiek skript nič nezapíše.
+Automatický databázový update je preto iba inkrementálny a staršie files
+nezneaktívni. Pri failed prefixoch je stav `complete_with_failures`; pri páde
+`aborted`.
+
+Manuálny full manifest je núdzová operácia po nezávislej validácii vstupu:
+
+```bash
+export CATALOG_ALLOW_FULL_RECONCILIATION=true
+npm run catalog:create-manifest -- \
+  --confirmed-full \
+  --allow-deactivation \
+  --items 1639152
+npm run catalog:import -- \
+  --input runtime/catalog-items.jsonl \
+  --manifest runtime/catalog-items.manifest.json \
+  --full \
+  --allow-deactivation
+```
+
+Bez všetkých guardrails skripty skončia pred otvorením databázy. Produkčné
+`CATALOG_ALLOW_FULL_RECONCILIATION` má zostať `false`, kým Fáza B formálne
+nepotvrdí úplnosť prefixového crawlu.
 
 Kompletný bezpečný denný tok:
 
@@ -91,7 +126,9 @@ Kompletný bezpečný denný tok:
 bash scripts/run-crawler-and-update.sh
 ```
 
-Wrapper najprv dokončí crawler a až potom spustí `npm run catalog:update-db`. Import sa nespustí pri existujúcom crawler locku ani pri nesúlade JSONL s manifestom.
+Wrapper používa `flock`, preflight `.env`/Node/npm/syntax, najprv dokončí crawler
+a až potom spustí `npm run catalog:update-db`. Import sa nespustí pri existujúcom
+crawler locku ani pri nesúlade JSONL s manifestom.
 
 ## Parser a grouping
 
@@ -180,6 +217,7 @@ Pripravené sú:
 ```text
 deploy/webshare-catalog-api.service
 deploy/nginx-webshare-catalog-api.conf
+deploy/webshare-runtime-logrotate
 scripts/install-catalog-api-server.sh
 ```
 
@@ -199,10 +237,18 @@ Bezpečné poradie:
 Po nasadení možno pôvodný cron príkaz nahradiť volaním wrappera:
 
 ```cron
-0 8,20 * * * /home/radeco/webshare-crawler/scripts/run-crawler-and-update.sh >> /home/radeco/webshare-crawler/runtime/cron.log 2>&1
+0 8,20 * * * /usr/bin/bash /home/radeco/webshare-crawler/scripts/run-crawler-and-update.sh >> /home/radeco/webshare-crawler/runtime/cron.log 2>&1
 ```
 
-Inštalačný skript zámerne automaticky neprepisuje nginx server blok. Ak chýba include snippet, skončí s jasnou správou.
+Explicitné volanie cez Bash funguje aj v prípade, že Git pracovná kópia nemá
+zachovaný execute bit. Wrapper zároveň zabráni prekrývaniu cron behov.
+
+Inštalačný skript inštaluje systemd jednotku, nginx snippet a logrotate pravidlo.
+Ak nginx default server ešte neobsahuje include, skript ho vloží a pri zlyhaní
+`nginx -t` obnoví zálohu.
+
+Runtime logrotate používa dennú kontrolu, `maxsize 100M`, 14 rotácií, kompresiu
+a `copytruncate`, aby nebolo potrebné reštartovať dlhý crawler.
 
 ## Monitoring
 

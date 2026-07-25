@@ -20,6 +20,9 @@ npm install --omit=dev
 node --check server/catalog-api.js
 node --check scripts/import-catalog-jsonl.js
 node --check scripts/enrich-metadata.js
+node --check scripts/update-catalog-database.js
+node --check scripts/create-catalog-manifest.js
+node --check lib/catalog-safety.js
 
 if [[ -f data/catalog.sqlite ]]; then
   npm run db:backup
@@ -28,6 +31,8 @@ npm run db:migrate
 
 sudo install -m 0644 deploy/webshare-catalog-api.service /etc/systemd/system/webshare-catalog-api.service
 sudo install -m 0644 deploy/nginx-webshare-catalog-api.conf /etc/nginx/snippets/webshare-catalog-api.conf
+sudo install -m 0644 deploy/webshare-runtime-logrotate /etc/logrotate.d/webshare-runtime
+sudo logrotate --debug /etc/logrotate.d/webshare-runtime >/dev/null
 
 if ! sudo grep -q "snippets/webshare-catalog-api.conf" /etc/nginx/sites-available/default; then
   NGINX_DEFAULT="/etc/nginx/sites-available/default"

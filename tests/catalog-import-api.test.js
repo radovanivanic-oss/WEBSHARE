@@ -34,7 +34,13 @@ async function createImportedFixture(t) {
     is_full: true,
     source_size: fs.statSync(inputPath).size,
   }));
-  await importCatalog({ input: inputPath, database: databasePath, errorLog: errorPath, manifest: manifestPath, batchSize: 2, full: true });
+  await importCatalog({
+    input: inputPath,
+    database: databasePath,
+    errorLog: errorPath,
+    manifest: manifestPath,
+    batchSize: 2,
+  });
   return { directory, inputPath, databasePath, errorPath, manifestPath };
 }
 
@@ -62,7 +68,13 @@ test("streaming import is idempotent and groups file versions", async (t) => {
   assert.equal(database.prepare("SELECT invalid_count FROM import_runs ORDER BY id DESC LIMIT 1").get().invalid_count, 1);
   database.close();
 
-  await importCatalog({ input: fixture.inputPath, database: fixture.databasePath, errorLog: fixture.errorPath, manifest: fixture.manifestPath, batchSize: 3, full: true });
+  await importCatalog({
+    input: fixture.inputPath,
+    database: fixture.databasePath,
+    errorLog: fixture.errorPath,
+    manifest: fixture.manifestPath,
+    batchSize: 3,
+  });
   database = openCatalogDatabase(fixture.databasePath, { fileMustExist: true });
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM files").get().count, 5);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM candidates").get().count, 3);

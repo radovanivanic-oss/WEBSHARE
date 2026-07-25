@@ -17,13 +17,7 @@ test("TMDb external ID merges differently parsed movie candidates", async (t) =>
     JSON.stringify({ ident: "matrix-a", name: "The.Matrix.1999.1080p.WEB-DL.mkv", type: "mkv", category: "video", size: 1000 }),
     JSON.stringify({ ident: "matrix-b", name: "Matrix.The.1999.2160p.WEB-DL.mkv", type: "mkv", category: "video", size: 2000 }),
   ].join("\n") + "\n");
-  const manifestPath = path.join(directory, "catalog-items.manifest.json");
-  fs.writeFileSync(manifestPath, JSON.stringify({
-    success: true,
-    is_full: true,
-    source_size: fs.statSync(inputPath).size,
-  }));
-  await importCatalog({ input: inputPath, database: databasePath, manifest: manifestPath, batchSize: 2, full: true });
+  await importCatalog({ input: inputPath, database: databasePath, batchSize: 2 });
   const database = openCatalogDatabase(databasePath, { fileMustExist: true });
   const config = {
     ...getCatalogConfig({ CATALOG_DB_PATH: databasePath }),
