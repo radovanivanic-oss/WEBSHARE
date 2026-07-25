@@ -16,13 +16,25 @@ const {
   RUN_STATUSES,
   buildUnverifiedCrawlerManifest,
 } = require("./lib/catalog-safety");
+const {
+  getCrawlerV2Config,
+  WEBSHARE_SEARCH_ENDPOINT,
+} = require("./lib/crawler/config");
+const {
+  executeCrawler,
+  inspectCrawlerState,
+  validateCrawlerState,
+} = require("./lib/crawler/orchestrator");
+const {
+  createWebshareSearchTransport,
+} = require("./lib/crawler/search-client");
 
 const execFileAsync = util.promisify(execFile);
 
 const BASE_URL = "https://webshare.cz";
 const SALT_URL = `${BASE_URL}/api/salt/`;
 const API_LOGIN_URL = `${BASE_URL}/api/login/`;
-const SEARCH_URL = `${BASE_URL}/api/search/`;
+const SEARCH_URL = WEBSHARE_SEARCH_ENDPOINT;
 const FILE_LINK_URL = `${BASE_URL}/api/file_link/`;
 const SEARCH_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
 const MIN_VIDEO_SIZE = 1;
@@ -816,8 +828,14 @@ function createWebshareLoginDigest(username, passwordHash) {
     .digest("hex");
 }
 
-async function postWebshareXml(client, url, params, endpointName) {
-  const response = await client.post(url, params.toString());
+async function postWebshareXml(
+  client,
+  url,
+  params,
+  endpointName,
+  requestOptions = {}
+) {
+  const response = await client.post(url, params.toString(), requestOptions);
   const parsed = await parseStringPromise(response.data, {
     explicitArray: true,
     trim: true,
@@ -826,13 +844,14 @@ async function postWebshareXml(client, url, params, endpointName) {
   return parseStatus(parsed, endpointName);
 }
 
-async function loginAndGetWst({ username, password }) {
+async function loginAndGetWst({ username, password, signal = undefined }) {
   const client = createApiClient();
   const saltResponse = await postWebshareXml(
     client,
     SALT_URL,
     new URLSearchParams({ username_or_email: username }),
-    "salt"
+    "salt",
+    { signal }
   );
   const salt = saltResponse.salt?.[0];
 
@@ -850,7 +869,8 @@ async function loginAndGetWst({ username, password }) {
       digest: createWebshareLoginDigest(username, passwordHash),
       keep_logged_in: "1",
     }),
-    "login"
+    "login",
+    { signal }
   );
   const token = loginResponse.token?.[0] || loginResponse.wst?.[0];
 
@@ -872,7 +892,7 @@ class WebshareSession {
     this.cachedWst = null;
   }
 
-  async getWst(forceRefresh = false) {
+  async getWst(forceRefresh = false, signal = undefined) {
     if (!forceRefresh && this.cachedWst) {
       return this.cachedWst;
     }
@@ -883,18 +903,20 @@ class WebshareSession {
         loginAndGetWst({
           username: this.config.username,
           password: this.config.password,
+          signal,
         }),
       "Webshare API login",
-      this.logger
+      this.logger,
+      { shouldRetry: () => !signal?.aborted }
     );
     return this.cachedWst;
   }
 
-  async withWst(task) {
+  async withWst(task, options = {}) {
     let refreshed = false;
 
     while (true) {
-      const wst = await this.getWst(refreshed);
+      const wst = await this.getWst(refreshed, options.signal);
 
       try {
         return await task(wst);
@@ -912,12 +934,19 @@ class WebshareSession {
   }
 }
 
-async function postXml(client, url, params, endpointName, stats) {
+async function postXml(
+  client,
+  url,
+  params,
+  endpointName,
+  stats,
+  requestOptions = {}
+) {
   if (stats) {
     stats.apiRequests += 1;
   }
 
-  const response = await client.post(url, params.toString());
+  const response = await client.post(url, params.toString(), requestOptions);
   const parsed = await parseStringPromise(response.data, {
     explicitArray: true,
     trim: true,
@@ -926,24 +955,44 @@ async function postXml(client, url, params, endpointName, stats) {
   return parseStatus(parsed, endpointName);
 }
 
-async function fetchSearchPage(client, session, { prefix, offset, limit }, stats) {
+async function fetchSearchPage(
+  client,
+  session,
+  {
+    prefix,
+    offset,
+    limit,
+    wildcardSuffix = "*",
+    sort = "recent",
+    category = "video",
+    signal = undefined,
+  },
+  stats
+) {
   return session.withWst(async (wst) => {
     const params = new URLSearchParams({
-      what: `${prefix}*`,
+      what: `${prefix}${wildcardSuffix}`,
       limit: String(limit),
       offset: String(offset),
-      sort: "recent",
-      category: "video",
+      sort,
+      category,
       wst,
     });
 
-    const response = await postXml(client, SEARCH_URL, params, "search", stats);
+    const response = await postXml(
+      client,
+      SEARCH_URL,
+      params,
+      "search",
+      stats,
+      { signal }
+    );
 
     return {
-      total: Number.parseInt(response.total?.[0] || "0", 10),
+      total: response.total?.[0] ?? null,
       files: Array.isArray(response.file) ? response.file : [],
     };
-  });
+  }, { signal });
 }
 
 async function resolveFileLink(client, ident, wst, logger, stats) {
@@ -1726,8 +1775,108 @@ function createWebshareResolver(options = {}) {
   };
 }
 
+const MAIN_COMMANDS = new Map([
+  ["--crawl", "crawl"],
+  ["--resume", "resume"],
+  ["--retry-failed", "retry-failed"],
+  ["--status", "status"],
+  ["--validate-crawl", "validate"],
+  ["--classify-only", "classify-only"],
+]);
+
+function mainUsage() {
+  return [
+    "Použitie:",
+    "  node main.js --crawl",
+    "  node main.js --resume",
+    "  node main.js --retry-failed",
+    "  node main.js --status",
+    "  node main.js --validate-crawl",
+    "  node main.js --classify-only",
+  ].join("\n");
+}
+
+function parseMainCommand(args) {
+  if (args.length === 1 && args[0] === "--help") {
+    return { command: "help" };
+  }
+  if (args.length === 0) {
+    return { error: "Crawler vyžaduje explicitný režim." };
+  }
+  const unknown = args.filter((argument) => !MAIN_COMMANDS.has(argument));
+  if (unknown.length > 0) {
+    return { error: `Neznámy argument: ${unknown.join(", ")}` };
+  }
+  if (args.length !== 1) {
+    return { error: "Použi presne jeden crawler režim." };
+  }
+  return { command: MAIN_COMMANDS.get(args[0]) };
+}
+
 async function main() {
-  const classifyOnly = process.argv.includes("--classify-only");
+  const parsedCommand = parseMainCommand(process.argv.slice(2));
+  if (parsedCommand.error) {
+    console.error(`${parsedCommand.error}\n${mainUsage()}`);
+    process.exitCode = 2;
+    return;
+  }
+  if (parsedCommand.command === "help") {
+    console.log(mainUsage());
+    return;
+  }
+
+  const command = parsedCommand.command;
+  if (["crawl", "resume", "retry-failed", "status", "validate"].includes(command)) {
+    const config = getCrawlerV2Config();
+    let logger = null;
+    try {
+      if (command === "status") {
+        console.log(JSON.stringify(inspectCrawlerState({ config }), null, 2));
+        return;
+      }
+      if (command === "validate") {
+        console.log(JSON.stringify(validateCrawlerState({ config }), null, 2));
+        return;
+      }
+      if (
+        ["resume", "retry-failed"].includes(command) &&
+        !fs.existsSync(config.stateDbPath)
+      ) {
+        throw new Error(`Crawler state DB neexistuje: ${config.stateDbPath}`);
+      }
+      const legacyConfig = getConfig();
+      await prepareRuntime(legacyConfig);
+      logger = createLogger(legacyConfig.logPath);
+      const stats = createRunStats();
+      const client = createApiClient();
+      const session = new WebshareSession(legacyConfig, logger);
+      const transport = createWebshareSearchTransport({
+        client,
+        session,
+        fetchSearchPage,
+        stats,
+        algorithm: config.algorithm,
+      });
+      const result = await executeCrawler({
+        command,
+        config,
+        transport,
+        normalizeItem: normalizeFile,
+        exportJsonl: true,
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (error) {
+      console.error(
+        `Crawler v2 príkaz zlyhal${error.code ? ` [${error.code}]` : ""}: ${error.message}`
+      );
+      process.exitCode = 1;
+    } finally {
+      await logger?.close();
+    }
+    return;
+  }
+
+  const classifyOnly = command === "classify-only";
   const config = getConfig({ requireCredentials: !classifyOnly });
   await prepareRuntime(config);
   const logger = createLogger(config.logPath);
@@ -1789,9 +1938,14 @@ if (require.main === module) {
 }
 
 module.exports = {
+  WebshareSession,
+  createApiClient,
   createWebshareResolver,
+  fetchSearchPage,
   getConfig,
+  mainUsage,
   normalizeFile,
+  parseMainCommand,
   publishExportsToGithub,
   resolveIdentToStreamUrl,
 };

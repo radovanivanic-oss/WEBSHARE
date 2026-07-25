@@ -85,8 +85,8 @@ Pred deaktiváciou musí byť počet neplatných riadkov nula a počet prečíta
 riadkov sa musí zhodovať s `manifest.items`. Files a odvodené `media.is_active`
 sa potom zmenia v správnom poradí v jednej transakcii.
 
-Aktuálny crawler používa prefixovú stratégiu, ktorej úplnosť ešte nie je
-potvrdená. Aj bez failed prefixov preto vytvára:
+Aktuálny crawler používa search/prefix stratégiu, ktorej úplnosť Webshare API
+nevie potvrdiť. Aj bez failed prefixov preto vytvára:
 
 ```json
 {
@@ -117,18 +117,19 @@ npm run catalog:import -- \
 ```
 
 Bez všetkých guardrails skripty skončia pred otvorením databázy. Produkčné
-`CATALOG_ALLOW_FULL_RECONCILIATION` má zostať `false`, kým Fáza B formálne
-nepotvrdí úplnosť prefixového crawlu.
+`CATALOG_ALLOW_FULL_RECONCILIATION` má zostať `false`. Fáza B nepotvrdila
+úplnosť a v2 zámerne nastavuje `reconciliation_safe=false`.
 
-Kompletný bezpečný denný tok:
+Legacy denný wrapper (po Fáze B zámerne zablokovaný no-argument guardom):
 
 ```bash
 bash scripts/run-crawler-and-update.sh
 ```
 
-Wrapper používa `flock`, preflight `.env`/Node/npm/syntax, najprv dokončí crawler
-a až potom spustí `npm run catalog:update-db`. Import sa nespustí pri existujúcom
-crawler locku ani pri nesúlade JSONL s manifestom.
+Wrapper používa `flock` a preflight `.env`/Node/npm/syntax. Kým nie je schválený
+shadow rollout v2, `node main.js` bez režimu zlyhá a vďaka `set -e` sa následný
+import nespustí. Wrapper sa nesmie prepnúť na `--crawl` iba formálnym
+deploymentom; vyžaduje samostatné rollout schválenie.
 
 ## Parser a grouping
 

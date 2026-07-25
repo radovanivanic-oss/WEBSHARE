@@ -16,10 +16,11 @@ Node.js crawler pre `webshare.cz`, určený na Ubuntu server a spúšťanie cez 
 ```bash
 npm install
 node --check main.js
-node main.js
+node main.js --status
 ```
 
-Pri lokálnom spustení nastav ENV premenné pred štartom.
+Crawler sa nespustí bez explicitného režimu. Návrh a recovery postup sú v
+`docs/crawler-correctness-recovery-v2.md`.
 
 ## GitHub workflow
 
@@ -80,8 +81,11 @@ cd ~/webshare-crawler
 set -a
 . ./.env
 set +a
-node main.js
+node main.js --status
 ```
+
+`--crawl`, `--resume` a `--retry-failed` sa nesmú v produkcii použiť, kým
+neprejde samostatne schválený shadow rollout.
 
 ## Cron
 
@@ -93,6 +97,9 @@ Spúšťanie 2× denne:
 
 Wrapper používa `flock`, vykoná preflight kontrolu Node.js a `.env` a nespustí druhý
 súbežný crawl/update. Volanie cez `/usr/bin/bash` nezávisí od execute bitu skriptu.
+Po Fáze B zostáva wrapper zámerne deployment-blocked: volá no-argument
+entrypoint, ktorý zlyhá bezpečne. Na `--crawl` sa smie prepnúť až po shadow
+validácii a samostatnom schválení.
 
 Crawler je oddelený od trading bota:
 
@@ -142,7 +149,8 @@ npm run catalog:reclassify
 npm run api:start
 ```
 
-Celý bezpečný crawler + SQLite update tok na Ubuntu:
+Legacy crawler + SQLite update wrapper (po Fáze B zámerne zablokovaný, kým
+nebude schválený nový rollout):
 
 ```bash
 bash scripts/run-crawler-and-update.sh
@@ -150,14 +158,15 @@ bash scripts/run-crawler-and-update.sh
 
 ## Production safety guardrail
 
-Aktuálna prefixová stratégia ešte nedokáže formálne potvrdiť úplnosť. Crawler preto
+Aktuálna search/prefix stratégia nedokáže formálne potvrdiť úplnosť. Crawler preto
 vytvára manifest `run_status: incomplete`, `is_full: false` a
 `reconciliation_safe: false`. Automatický update je iba inkrementálny a nikdy
 nezneaktívni staršie súbory.
 
 Full reconciliation je fail-closed a vyžaduje samostatne overený manifest,
 `--allow-deactivation` aj `CATALOG_ALLOW_FULL_RECONCILIATION=true`. Tento prepínač
-má v produkčnom `.env` zostať `false`, kým Fáza B nepotvrdí úplnosť crawlu.
+má v produkčnom `.env` zostať `false`. Fáza B empiricky potvrdila, že dnešné
+Webshare search rozhranie neposkytuje úplný, disjunktný prefix partition.
 
 API štandardne počúva iba na `127.0.0.1:8787` a je určené pre nginx reverse proxy cez `/api/`.
 Podrobná architektúra a bezpečné nasadenie sú v `docs/CATALOG-SERVER.md`.
