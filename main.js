@@ -28,6 +28,16 @@ const {
 const {
   createWebshareSearchTransport,
 } = require("./lib/crawler/search-client");
+const {
+  createShadowConfig,
+  readShadowReport,
+} = require("./lib/crawler/shadow");
+const {
+  executeShadowCrawler,
+  inspectShadowState,
+  prepareShadowRoot,
+  validateShadowState,
+} = require("./lib/crawler/shadow-runner");
 
 const execFileAsync = util.promisify(execFile);
 
@@ -133,18 +143,76 @@ function computeBackoffMs(attempt) {
   return exponential + jitter;
 }
 
-function createLogger(logPath) {
-  const stream = fs.createWriteStream(logPath, { flags: "a" });
+function sanitizeLogValue(value, secrets = []) {
+  const secretValues = secrets
+    .filter((entry) => typeof entry === "string" && entry.length > 0)
+    .sort((left, right) => right.length - left.length);
+  const seen = new WeakSet();
+  function visit(input, key = "") {
+    if (/password|passwd|wst|token|digest|authorization/i.test(key)) {
+      return "[REDACTED]";
+    }
+    if (typeof input === "string") {
+      let result = input
+        .replace(/([?&]wst=)[^&\s]+/gi, "$1[REDACTED]")
+        .replace(/(\"?(?:wst|token|password|digest)\"?\s*[:=]\s*)[^,\s}]+/gi, "$1[REDACTED]");
+      for (const secret of secretValues) result = result.replaceAll(secret, "[REDACTED]");
+      return result.slice(0, 2000);
+    }
+    if (!input || typeof input !== "object") return input;
+    if (seen.has(input)) return "[Circular]";
+    seen.add(input);
+    if (Array.isArray(input)) return input.slice(0, 50).map((entry) => visit(entry));
+    return Object.fromEntries(
+      Object.entries(input)
+        .slice(0, 50)
+        .map(([childKey, child]) => [childKey, visit(child, childKey)])
+    );
+  }
+  return visit(value);
+}
+
+function createLogger(logPath, options = {}) {
+  options.pathGuard?.verify(logPath, "shadow log");
+  const noFollow = fs.constants.O_NOFOLLOW || 0;
+  const descriptor = fs.openSync(
+    logPath,
+    fs.constants.O_CREAT |
+      fs.constants.O_APPEND |
+      fs.constants.O_WRONLY |
+      noFollow,
+    0o640
+  );
+  try {
+    options.pathGuard?.verify(logPath, "shadow log");
+  } catch (error) {
+    fs.closeSync(descriptor);
+    throw error;
+  }
+  const maxBytes = Number.isSafeInteger(options.maxBytes)
+    ? options.maxBytes
+    : Number.MAX_SAFE_INTEGER;
+  let writtenBytes = fs.existsSync(logPath) ? fs.statSync(logPath).size : 0;
+  let capped = writtenBytes >= maxBytes;
 
   function write(level, message, extra) {
     const timestamp = new Date().toISOString();
-    const base = `[${timestamp}] [${level}] ${message}`;
+    const safeMessage = sanitizeLogValue(message, options.secrets);
+    const safeExtra = sanitizeLogValue(extra, options.secrets);
+    const base = `[${timestamp}] [${level}] ${safeMessage}`;
     const suffix =
-      extra === undefined ? "" : ` ${JSON.stringify(extra, null, 2)}`;
-    const line = `${base}${suffix}`;
+      safeExtra === undefined ? "" : ` ${JSON.stringify(safeExtra)}`;
+    const line = `${base}${suffix}`.slice(0, 4096);
 
     console.log(line);
-    stream.write(`${line}\n`);
+    const payload = `${line}\n`;
+    const bytes = Buffer.byteLength(payload);
+    if (!capped && writtenBytes + bytes <= maxBytes) {
+      fs.writeSync(descriptor, payload);
+      writtenBytes += bytes;
+    } else {
+      capped = true;
+    }
   }
 
   return {
@@ -158,7 +226,7 @@ function createLogger(logPath) {
       write("ERROR", message, extra);
     },
     async close() {
-      await new Promise((resolve) => stream.end(resolve));
+      fs.closeSync(descriptor);
     },
   };
 }
@@ -835,7 +903,14 @@ async function postWebshareXml(
   endpointName,
   requestOptions = {}
 ) {
-  const response = await client.post(url, params.toString(), requestOptions);
+  const {
+    requestMeter,
+    requestOperationKey = endpointName,
+    ...httpOptions
+  } = requestOptions;
+  requestMeter?.beforeRequest("login", requestOperationKey);
+  const response = await client.post(url, params.toString(), httpOptions);
+  requestMeter?.afterRequest();
   const parsed = await parseStringPromise(response.data, {
     explicitArray: true,
     trim: true,
@@ -844,14 +919,24 @@ async function postWebshareXml(
   return parseStatus(parsed, endpointName);
 }
 
-async function loginAndGetWst({ username, password, signal = undefined }) {
-  const client = createApiClient();
+async function loginAndGetWst({
+  username,
+  password,
+  signal = undefined,
+  requestMeter = null,
+  client = null,
+}) {
+  const apiClient = client || createApiClient();
   const saltResponse = await postWebshareXml(
-    client,
+    apiClient,
     SALT_URL,
     new URLSearchParams({ username_or_email: username }),
     "salt",
-    { signal }
+    {
+      signal,
+      requestMeter,
+      requestOperationKey: "salt",
+    }
   );
   const salt = saltResponse.salt?.[0];
 
@@ -861,7 +946,7 @@ async function loginAndGetWst({ username, password, signal = undefined }) {
 
   const passwordHash = createWebsharePasswordHash(password, salt);
   const loginResponse = await postWebshareXml(
-    client,
+    apiClient,
     API_LOGIN_URL,
     new URLSearchParams({
       username_or_email: username,
@@ -870,7 +955,11 @@ async function loginAndGetWst({ username, password, signal = undefined }) {
       keep_logged_in: "1",
     }),
     "login",
-    { signal }
+    {
+      signal,
+      requestMeter,
+      requestOperationKey: "login",
+    }
   );
   const token = loginResponse.token?.[0] || loginResponse.wst?.[0];
 
@@ -882,10 +971,13 @@ async function loginAndGetWst({ username, password, signal = undefined }) {
 }
 
 class WebshareSession {
-  constructor(config, logger) {
+  constructor(config, logger, options = {}) {
     this.config = config;
     this.logger = logger;
     this.cachedWst = null;
+    this.requestMeter = options.requestMeter || null;
+    this.login = options.login || loginAndGetWst;
+    this.apiClient = options.apiClient || null;
   }
 
   invalidate() {
@@ -900,10 +992,12 @@ class WebshareSession {
     this.logger.info("Obnovujem WST token.");
     this.cachedWst = await retry(
       () =>
-        loginAndGetWst({
+        this.login({
           username: this.config.username,
           password: this.config.password,
           signal,
+          requestMeter: this.requestMeter,
+          client: this.apiClient,
         }),
       "Webshare API login",
       this.logger,
@@ -946,7 +1040,17 @@ async function postXml(
     stats.apiRequests += 1;
   }
 
-  const response = await client.post(url, params.toString(), requestOptions);
+  const {
+    requestMeter,
+    requestOperationKey = endpointName,
+    ...httpOptions
+  } = requestOptions;
+  requestMeter?.beforeRequest(
+    endpointName === "search" ? "search" : "login",
+    requestOperationKey
+  );
+  const response = await client.post(url, params.toString(), httpOptions);
+  requestMeter?.afterRequest();
   const parsed = await parseStringPromise(response.data, {
     explicitArray: true,
     trim: true,
@@ -966,6 +1070,7 @@ async function fetchSearchPage(
     sort = "recent",
     category = "video",
     signal = undefined,
+    requestMeter = null,
   },
   stats
 ) {
@@ -985,7 +1090,11 @@ async function fetchSearchPage(
       params,
       "search",
       stats,
-      { signal }
+      {
+        signal,
+        requestMeter,
+        requestOperationKey: `search:${prefix}:${offset}:${limit}`,
+      }
     );
 
     return {
@@ -1777,21 +1886,45 @@ function createWebshareResolver(options = {}) {
 
 const MAIN_COMMANDS = new Map([
   ["--crawl", "crawl"],
+  ["--shadow-crawl", "shadow-crawl"],
   ["--resume", "resume"],
   ["--retry-failed", "retry-failed"],
   ["--status", "status"],
   ["--validate-crawl", "validate"],
   ["--classify-only", "classify-only"],
 ]);
+const SHADOW_VALUE_OPTIONS = new Map([
+  ["--shadow-dir", "shadowDir"],
+  ["--shadow-root-prefix", "shadowRootPrefix"],
+  ["--shadow-root-prefixes", "shadowRootPrefixes"],
+  ["--max-prefixes", "maxPrefixes"],
+  ["--max-pages", "maxPages"],
+  ["--max-items", "maxItems"],
+  ["--max-requests", "maxRequests"],
+  ["--max-duration-minutes", "maxDurationMinutes"],
+  ["--max-disk-bytes", "maxDiskBytes"],
+  ["--concurrency", "concurrency"],
+  ["--page-size", "pageSize"],
+]);
+const SHADOW_BOOLEAN_OPTIONS = new Map([
+  ["--resume-shadow-limited", "resumeShadowLimited"],
+]);
+const SHADOW_FORBIDDEN_OPTIONS = new Set([
+  "--confirmed-full",
+  "--import",
+  "--publish",
+  "--allow-deactivation",
+]);
 
 function mainUsage() {
   return [
     "Použitie:",
     "  node main.js --crawl",
+    "  node main.js --shadow-crawl [--shadow-dir PATH] [bounded limits]",
     "  node main.js --resume",
     "  node main.js --retry-failed",
-    "  node main.js --status",
-    "  node main.js --validate-crawl",
+    "  node main.js --status [--shadow-dir PATH]",
+    "  node main.js --validate-crawl [--shadow-dir PATH]",
     "  node main.js --classify-only",
   ].join("\n");
 }
@@ -1803,14 +1936,124 @@ function parseMainCommand(args) {
   if (args.length === 0) {
     return { error: "Crawler vyžaduje explicitný režim." };
   }
-  const unknown = args.filter((argument) => !MAIN_COMMANDS.has(argument));
-  if (unknown.length > 0) {
-    return { error: `Neznámy argument: ${unknown.join(", ")}` };
+  const commandArguments = args.filter((argument) =>
+    MAIN_COMMANDS.has(argument)
+  );
+  if (commandArguments.length === 0) {
+    return { error: `Neznámy argument: ${args.join(", ")}` };
   }
-  if (args.length !== 1) {
+  if (commandArguments.length > 1) {
     return { error: "Použi presne jeden crawler režim." };
   }
-  return { command: MAIN_COMMANDS.get(args[0]) };
+  const command = MAIN_COMMANDS.get(commandArguments[0]);
+  const options = {};
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (MAIN_COMMANDS.has(argument)) continue;
+    if (SHADOW_FORBIDDEN_OPTIONS.has(argument)) {
+      return {
+        error: `Shadow režim nepodporuje nebezpečný argument: ${argument}`,
+      };
+    }
+    if (SHADOW_BOOLEAN_OPTIONS.has(argument)) {
+      const booleanName = SHADOW_BOOLEAN_OPTIONS.get(argument);
+      if (Object.hasOwn(options, booleanName)) {
+        return { error: `Argument ${argument} bol zadaný viackrát.` };
+      }
+      options[booleanName] = true;
+      continue;
+    }
+    const optionName = SHADOW_VALUE_OPTIONS.get(argument);
+    if (!optionName) {
+      return { error: `Neznámy argument: ${argument}` };
+    }
+    const value = args[index + 1];
+    if (!value || value.startsWith("--")) {
+      return { error: `Argument ${argument} vyžaduje hodnotu.` };
+    }
+    if (Object.hasOwn(options, optionName)) {
+      return { error: `Argument ${argument} bol zadaný viackrát.` };
+    }
+    options[optionName] = value;
+    index += 1;
+  }
+  const hasShadowOptions =
+    Object.keys(options).length > 0 || command === "shadow-crawl";
+  const shadowMode =
+    command === "shadow-crawl" ||
+    (["status", "resume", "retry-failed", "validate"].includes(command) &&
+      Boolean(options.shadowDir));
+  if (options.shadowRootPrefix && options.shadowRootPrefixes) {
+    return {
+      error: "Použi iba jeden z --shadow-root-prefix a --shadow-root-prefixes.",
+    };
+  }
+  if (hasShadowOptions && !shadowMode) {
+    return {
+      error:
+        "Shadow parametre vyžadujú --shadow-crawl alebo read-only/resume režim s --shadow-dir.",
+    };
+  }
+  if (options.resumeShadowLimited && command !== "resume") {
+    return {
+      error: "--resume-shadow-limited je platný iba s --resume --shadow-dir.",
+    };
+  }
+  return { command, options, shadowMode };
+}
+
+function shadowCliOptions(parsedCommand, previousReport = null) {
+  const source = parsedCommand.options || {};
+  const integerFields = [
+    "maxPrefixes",
+    "maxPages",
+    "maxItems",
+    "maxRequests",
+    "maxDurationMinutes",
+    "maxDiskBytes",
+    "concurrency",
+    "pageSize",
+  ];
+  const limits = {};
+  for (const field of integerFields) {
+    const value =
+      source[field] === undefined
+        ? previousReport?.shadow_limits?.[field]
+        : parseStrictPositiveInteger(source[field], `--${field}`);
+    if (value !== undefined) limits[field] = value;
+  }
+  const rootsValue =
+    source.shadowRootPrefixes || source.shadowRootPrefix || null;
+  const rootPrefixes = rootsValue
+    ? String(rootsValue)
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    : previousReport?.root_prefixes;
+  return {
+    shadowDir: source.shadowDir,
+    limits,
+    rootPrefixes,
+  };
+}
+
+function parseStrictPositiveInteger(value, label) {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new TypeError(`${label} musí byť kladné celé číslo.`);
+    }
+    return value;
+  }
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) {
+    throw new TypeError(
+      `${label} musí byť desiatkové kladné celé číslo bez exponentu.`
+    );
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new TypeError(`${label} prekračuje bezpečný integer rozsah.`);
+  }
+  return parsed;
 }
 
 async function main() {
@@ -1826,6 +2069,81 @@ async function main() {
   }
 
   const command = parsedCommand.command;
+  if (parsedCommand.shadowMode) {
+    let logger = null;
+    try {
+      let previousReport = null;
+      if (["resume", "retry-failed", "status", "validate"].includes(command)) {
+        const preliminaryConfig = createShadowConfig({
+          shadowDir: parsedCommand.options.shadowDir,
+        });
+        previousReport = readShadowReport(preliminaryConfig.paths.report);
+      }
+      const shadowConfig = createShadowConfig(
+        shadowCliOptions(parsedCommand, previousReport)
+      );
+      if (command === "status") {
+        console.log(
+          JSON.stringify(inspectShadowState({ shadowConfig }), null, 2)
+        );
+        return;
+      }
+      if (command === "validate") {
+        console.log(
+          JSON.stringify(validateShadowState({ shadowConfig }), null, 2)
+        );
+        return;
+      }
+      const shadowPathGuard = prepareShadowRoot(shadowConfig);
+      logger = createLogger(shadowConfig.paths.log, {
+        maxBytes: Math.min(
+          4 * 1024 * 1024,
+          Math.floor(shadowConfig.limits.maxDiskBytes / 100)
+        ),
+        secrets: [
+          process.env.WEBSHARE_PASSWORD,
+          process.env.WEBSHARE_USERNAME,
+        ],
+        pathGuard: shadowPathGuard,
+      });
+      const legacyConfig = getConfig();
+      const stats = createRunStats();
+      const result = await executeShadowCrawler({
+        command: command === "shadow-crawl" ? "crawl" : command,
+        shadowConfig,
+        logger,
+        resumeShadowLimited:
+          parsedCommand.options.resumeShadowLimited === true,
+        normalizeItem: normalizeFile,
+        transportFactory: async ({ requestMeter }) => {
+          const client = createApiClient();
+          const session = new WebshareSession(legacyConfig, logger, {
+            requestMeter,
+          });
+          return createWebshareSearchTransport({
+            client,
+            session,
+            fetchSearchPage,
+            stats,
+            algorithm: shadowConfig.crawler.algorithm,
+            requestMeter,
+          });
+        },
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (error) {
+      console.error(
+        sanitizeLogValue(
+          `Shadow crawler príkaz zlyhal${error.code ? ` [${error.code}]` : ""}: ${error.message}`,
+          [process.env.WEBSHARE_PASSWORD, process.env.WEBSHARE_USERNAME]
+        )
+      );
+      process.exitCode = 1;
+    } finally {
+      await logger?.close();
+    }
+    return;
+  }
   if (["crawl", "resume", "retry-failed", "status", "validate"].includes(command)) {
     const config = getCrawlerV2Config();
     let logger = null;
@@ -1939,6 +2257,8 @@ if (require.main === module) {
 
 module.exports = {
   WebshareSession,
+  createLogger,
+  loginAndGetWst,
   createApiClient,
   createWebshareResolver,
   fetchSearchPage,
@@ -1946,6 +2266,9 @@ module.exports = {
   mainUsage,
   normalizeFile,
   parseMainCommand,
+  parseStrictPositiveInteger,
+  sanitizeLogValue,
+  shadowCliOptions,
   publishExportsToGithub,
   resolveIdentToStreamUrl,
 };

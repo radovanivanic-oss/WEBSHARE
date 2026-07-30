@@ -2,6 +2,7 @@
 const fs = require("fs");
 const path = require("path");
 const {
+  assertSourceIsNotShadow,
   FULL_RECONCILIATION_ENV,
   buildManuallyConfirmedManifest,
   isFullReconciliationEnabled,
@@ -30,6 +31,7 @@ function main() {
   const config = getCatalogConfig();
   const inputPath = path.resolve(argument("--input") || path.join(config.runtimeDir, "catalog-items.jsonl"));
   const manifestPath = path.resolve(argument("--output") || path.join(config.runtimeDir, "catalog-items.manifest.json"));
+  assertSourceIsNotShadow(inputPath, manifestPath);
   const lockPath = path.join(config.runtimeDir, "webshare-crawler.lock");
   if (fs.existsSync(lockPath)) throw new Error("Crawler práve beží.");
   const stat = fs.statSync(inputPath);

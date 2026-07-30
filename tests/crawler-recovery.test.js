@@ -766,7 +766,7 @@ test("atomic lock rejects a second crawler process", async (t) => {
     () => acquireCrawlerLock(config.lockPath, "run-two"),
     /Crawler lock existuje/
   );
-  const exitCode = await new Promise((resolve) => child.on("exit", resolve));
+  const exitCode = await new Promise((resolve) => child.on("close", resolve));
   assert.equal(exitCode, 0, errors);
   assert.match(output, /RELEASED/);
 });

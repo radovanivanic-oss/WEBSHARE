@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { buildCandidate } = require("../lib/candidate-grouper");
 const {
+  assertSourceIsNotShadow,
   assertFullReconciliationAllowed,
   fileFingerprint,
   loadAndValidateCatalogManifest,
@@ -34,6 +35,7 @@ function validateFullManifest(options, inputPath, stat) {
   const manifestPath = path.resolve(
     options.manifest || path.join(path.dirname(inputPath), "catalog-items.manifest.json")
   );
+  assertSourceIsNotShadow(inputPath, manifestPath);
   const manifest = loadAndValidateCatalogManifest(manifestPath, inputPath, stat, {
     requireCurrentSchema: true,
   });

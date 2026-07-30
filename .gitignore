@@ -1,6 +1,8 @@
 node_modules/
 .env
 runtime/
+# Explicit safety boundary for the bounded shadow rollout artifacts.
+runtime/shadow-phase-b/
 data/
 *.log
 *.tmp
