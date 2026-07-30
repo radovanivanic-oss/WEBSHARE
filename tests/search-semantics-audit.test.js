@@ -213,6 +213,11 @@ test("diagnostic audit is sequential, preserves wildcard input and redacts crede
   assert.equal(result.report.results[2].query, "test*");
   assert.equal(result.report.results[2].request_url_shape.what, "test*");
   assert.equal(
+    result.report.results[2].match_counts
+      .token_equals_query_without_trailing_wildcard,
+    2
+  );
+  assert.equal(
     result.report.results[2].timestamp_schema.uploaded_at.present,
     true
   );

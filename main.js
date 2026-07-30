@@ -67,6 +67,28 @@ const MD5_CRYPT_ALPHABET =
   "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const SENSITIVE_LOG_KEYS = new Set([
+  "password",
+  "passwd",
+  "wst",
+  "token",
+  "digest",
+  "authorization",
+  "authorization_header",
+  "auth_header",
+  "bearer",
+  "bearer_token",
+  "bearer_value",
+  "access_token",
+  "refresh_token",
+  "auth_token",
+  "session_token",
+  "token_value",
+  "token_secret",
+  "password_hash",
+  "password_digest",
+  "wst_value",
+]);
 
 class WebshareApiError extends Error {
   constructor(endpoint, code, message, status) {
@@ -143,19 +165,45 @@ function computeBackoffMs(attempt) {
   return exponential + jitter;
 }
 
+function isSensitiveLogKey(key) {
+  const normalized = String(key || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+  if (!normalized) return false;
+  if (SENSITIVE_LOG_KEYS.has(normalized)) {
+    return true;
+  }
+  return /_(?:password|passwd|password_hash|password_digest|wst|wst_value|digest|authorization|authorization_header|auth_header|bearer|bearer_token|access_token|refresh_token|auth_token|session_token|token)$/u.test(
+    normalized
+  );
+}
+
 function sanitizeLogValue(value, secrets = []) {
   const secretValues = secrets
     .filter((entry) => typeof entry === "string" && entry.length > 0)
     .sort((left, right) => right.length - left.length);
   const seen = new WeakSet();
   function visit(input, key = "") {
-    if (/password|passwd|wst|token|digest|authorization/i.test(key)) {
+    if (isSensitiveLogKey(key)) {
       return "[REDACTED]";
     }
     if (typeof input === "string") {
       let result = input
         .replace(/([?&]wst=)[^&\s]+/gi, "$1[REDACTED]")
-        .replace(/(\"?(?:wst|token|password|digest)\"?\s*[:=]\s*)[^,\s}]+/gi, "$1[REDACTED]");
+        .replace(
+          /(\b(?:wst|token|password|passwd|digest|access_token|refresh_token|auth_token)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^,\s}&}]+)/gi,
+          "$1[REDACTED]"
+        )
+        .replace(
+          /(\bauthorization\s*[:=]\s*)(?:(?:bearer|basic)\s+)?(?:"[^"]*"|'[^']*'|[^,\s;}]+)/gi,
+          "$1[REDACTED]"
+        )
+        .replace(
+          /(\bbearer\s+)[a-z0-9._~+/=-]+/gi,
+          "$1[REDACTED]"
+        );
       for (const secret of secretValues) result = result.replaceAll(secret, "[REDACTED]");
       return result.slice(0, 2000);
     }
