@@ -3,6 +3,8 @@ node_modules/
 runtime/
 # Explicit safety boundary for the bounded shadow rollout artifacts.
 runtime/shadow-phase-b/
+# Explicit safety boundary for B.5 hybrid discovery staging.
+runtime/hybrid-discovery*/
 data/
 *.log
 *.tmp
