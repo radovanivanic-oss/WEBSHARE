@@ -154,9 +154,6 @@ async function streamIntoDatabase(options) {
     insert,
     database,
     label,
-    comparablePrefixes = null,
-    shadowPrefixes = null,
-    updateComparable = null,
     maxLineBytes = MAX_JSONL_LINE_BYTES,
   } = options;
   const metrics = {
@@ -164,10 +161,9 @@ async function streamIntoDatabase(options) {
     invalidLines: 0,
     oversizedLines: 0,
     duplicateLines: 0,
-    comparableLines: 0,
     extension: new Map(),
     category: new Map(),
-    prefix: new Map(),
+    nameInitial: new Map(),
   };
   let inTransaction = false;
   let pending = 0;
@@ -200,25 +196,13 @@ async function streamIntoDatabase(options) {
         metrics.invalidLines += 1;
         continue;
       }
-      const prefix = itemPrefix(item);
-      if (shadowPrefixes) shadowPrefixes.add(prefix);
-      const comparable =
-        !comparablePrefixes || comparablePrefixes.has(prefix) ? 1 : 0;
-      const result = comparablePrefixes
-        ? insert.run(item.ident, comparable)
-        : insert.run(item.ident);
+      const result = insert.run(item.ident);
       if (result.changes === 0) {
         metrics.duplicateLines += 1;
-        if (comparable && updateComparable) {
-          const promoted = updateComparable.run(item.ident);
-          if (promoted.changes === 1) metrics.comparableLines += 1;
-        }
-      } else if (comparable) {
-        metrics.comparableLines += 1;
       }
       increment(metrics.extension, item.extension || item.type);
       increment(metrics.category, item.category);
-      increment(metrics.prefix, prefix);
+      increment(metrics.nameInitial, itemPrefix(item));
       pending += 1;
       if (pending >= SQLITE_BATCH_LINES) {
         commit();
@@ -236,11 +220,10 @@ async function streamIntoDatabase(options) {
     invalid_lines: metrics.invalidLines,
     oversized_lines: metrics.oversizedLines,
     duplicate_lines: metrics.duplicateLines,
-    comparable_unique_lines: metrics.comparableLines,
     distribution_key_limit: MAX_DISTRIBUTION_KEYS,
     extension_distribution: objectFromMap(metrics.extension),
     category_distribution: objectFromMap(metrics.category),
-    prefix_distribution: objectFromMap(metrics.prefix),
+    name_initial_distribution: objectFromMap(metrics.nameInitial),
   };
 }
 
@@ -286,11 +269,9 @@ async function compareShadowCrawl(options) {
         ident TEXT PRIMARY KEY
       ) WITHOUT ROWID;
       CREATE TABLE legacy_idents (
-        ident TEXT PRIMARY KEY,
-        comparable INTEGER NOT NULL DEFAULT 0
+        ident TEXT PRIMARY KEY
       ) WITHOUT ROWID;
     `);
-    const shadowPrefixes = new Set();
     const shadowMetrics = await streamIntoDatabase({
       inputPath: resolvedOptions.shadowJsonl,
       insert: database.prepare(
@@ -298,57 +279,74 @@ async function compareShadowCrawl(options) {
       ),
       database,
       label: "shadow",
-      shadowPrefixes,
       maxLineBytes: options.maxLineBytes,
     });
     const legacyMetrics = await streamIntoDatabase({
       inputPath: resolvedOptions.legacyJsonl,
       insert: database.prepare(
-        "INSERT OR IGNORE INTO legacy_idents(ident, comparable) VALUES (?, ?)"
+        "INSERT OR IGNORE INTO legacy_idents(ident) VALUES (?)"
       ),
       database,
       label: "legacy",
-      comparablePrefixes: shadowPrefixes,
-      updateComparable: database.prepare(
-        "UPDATE legacy_idents SET comparable = 1 WHERE ident = ? AND comparable = 0"
-      ),
       maxLineBytes: options.maxLineBytes,
     });
 
     const scalar = (sql) => Number(database.prepare(sql).get().count);
+    const shadowUniqueIdents = scalar(
+      "SELECT COUNT(*) AS count FROM shadow_idents"
+    );
+    const legacyUniqueIdents = scalar(
+      "SELECT COUNT(*) AS count FROM legacy_idents"
+    );
+    const overlap = scalar(`
+      SELECT COUNT(*) AS count
+      FROM shadow_idents s
+      INNER JOIN legacy_idents l ON l.ident = s.ident
+    `);
+    const shadowOnly = scalar(`
+      SELECT COUNT(*) AS count
+      FROM shadow_idents s
+      LEFT JOIN legacy_idents l ON l.ident = s.ident
+      WHERE l.ident IS NULL
+    `);
+    const legacyOnly = scalar(`
+      SELECT COUNT(*) AS count
+      FROM legacy_idents l
+      LEFT JOIN shadow_idents s ON s.ident = l.ident
+      WHERE s.ident IS NULL
+    `);
     const report = {
       generated_at: new Date().toISOString(),
       comparison_is_not_reconciliation: true,
       legacy_only_is_not_deletion: true,
+      comparable_scope_status: "unknown",
+      comparable_scope_reason:
+        "Search query semantics are not proven. Filename initials are descriptive only and must not be used as search partitions.",
       scope_note:
         "Bounded shadow rozsah nie je úplný katalóg; legacy-only je iba pozorovanie absencie v tomto výreze a nikdy nie pokyn na odstránenie.",
-      shadow_unique_idents: scalar(
-        "SELECT COUNT(*) AS count FROM shadow_idents"
-      ),
-      legacy_unique_idents: scalar(
-        "SELECT COUNT(*) AS count FROM legacy_idents"
-      ),
-      legacy_unique_idents_in_comparable_prefixes: scalar(
-        "SELECT COUNT(*) AS count FROM legacy_idents WHERE comparable = 1"
-      ),
-      overlap: scalar(`
-        SELECT COUNT(*) AS count
-        FROM shadow_idents s
-        INNER JOIN legacy_idents l ON l.ident = s.ident
-      `),
-      shadow_only: scalar(`
-        SELECT COUNT(*) AS count
-        FROM shadow_idents s
-        LEFT JOIN legacy_idents l ON l.ident = s.ident
-        WHERE l.ident IS NULL
-      `),
-      legacy_only: scalar(`
-        SELECT COUNT(*) AS count
-        FROM legacy_idents l
-        LEFT JOIN shadow_idents s ON s.ident = l.ident
-        WHERE s.ident IS NULL
-      `),
-      comparable_prefixes: [...shadowPrefixes].sort(),
+      shadow_unique_idents: shadowUniqueIdents,
+      legacy_unique_idents: legacyUniqueIdents,
+      overlap,
+      shadow_only: shadowOnly,
+      legacy_only: legacyOnly,
+      global_overlap: {
+        shared_idents: overlap,
+        shadow_only: shadowOnly,
+        legacy_only: legacyOnly,
+      },
+      sample_overlap: {
+        sample_unique_idents: shadowUniqueIdents,
+        matched_in_legacy: overlap,
+        sample_only: shadowOnly,
+        match_percent:
+          shadowUniqueIdents === 0
+            ? null
+            : Number(((overlap / shadowUniqueIdents) * 100).toFixed(6)),
+      },
+      proven_comparable_overlap: null,
+      legacy_unique_idents_in_comparable_scope: null,
+      legacy_only_in_comparable_scope: null,
+      name_initial_distribution_is_not_search_scope: true,
       shadow: shadowMetrics,
       legacy: legacyMetrics,
     };

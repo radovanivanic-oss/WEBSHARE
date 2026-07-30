@@ -1059,6 +1059,48 @@ test("comparison tool streams inputs and labels absence as non-reconciliation", 
   assert.equal(report.overlap, 1);
   assert.equal(report.shadow.duplicate_lines, 1);
   assert.equal(report.shadow.invalid_lines, 1);
+  assert.equal(report.comparable_scope_status, "unknown");
+  assert.equal(report.proven_comparable_overlap, null);
+  assert.equal(report.legacy_unique_idents_in_comparable_scope, null);
+  assert.equal(report.legacy_only_in_comparable_scope, null);
+  assert.equal(report.name_initial_distribution_is_not_search_scope, true);
+  assert.equal(Object.hasOwn(report, "comparable_prefixes"), false);
+  assert.deepEqual(report.sample_overlap, {
+    sample_unique_idents: 2,
+    matched_in_legacy: 1,
+    sample_only: 1,
+    match_percent: 50,
+  });
+});
+
+test("comparison never derives query scope from filename initials", async (t) => {
+  const root = temporaryProject(t);
+  const shadow = path.join(root, "shadow.jsonl");
+  const legacy = path.join(root, "legacy.jsonl");
+  const output = path.join(root, "comparison.json");
+  fs.writeFileSync(
+    shadow,
+    `${JSON.stringify({ ident: "new", name: "Alpha from query zero.mkv" })}\n`
+  );
+  fs.writeFileSync(
+    legacy,
+    `${JSON.stringify({ ident: "old", name: "Another alpha.mkv" })}\n`
+  );
+  const report = await compareShadowCrawl({
+    shadowJsonl: shadow,
+    legacyJsonl: legacy,
+    outputReport: output,
+  });
+  assert.equal(report.comparable_scope_status, "unknown");
+  assert.equal(report.overlap, 0);
+  assert.equal(report.shadow_only, 1);
+  assert.equal(report.legacy_only, 1);
+  assert.equal(report.proven_comparable_overlap, null);
+  assert.equal(report.legacy_unique_idents_in_comparable_scope, null);
+  assert.equal(report.legacy_only_in_comparable_scope, null);
+  assert.equal(Object.hasOwn(report, "comparable_prefixes"), false);
+  assert.deepEqual(report.shadow.name_initial_distribution, { a: 1 });
+  assert.deepEqual(report.legacy.name_initial_distribution, { a: 1 });
 });
 
 test("comparison rejects input/output aliases and bounds hostile distributions/lines", async (t) => {
