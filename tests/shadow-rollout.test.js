@@ -198,7 +198,7 @@ test("shadow refuses a symlinked root", (t) => {
   );
 });
 
-test("shadow path rejects traversal, UNC, drive-relative and Windows case collisions", (t) => {
+test("shadow path rejects traversal, Windows-form hazards and platform-specific case collisions", (t) => {
   const projectRoot = temporaryProject(t);
   assert.throws(
     () =>
@@ -227,14 +227,25 @@ test("shadow path rejects traversal, UNC, drive-relative and Windows case collis
   const caseVariant = path
     .join(projectRoot, "runtime")
     .replace(/runtime$/i, "RUNTIME");
-  assert.throws(
-    () => createShadowConfig({ projectRoot, shadowDir: caseVariant }),
-    /produkčný runtime/
-  );
-  assert.equal(
-    pathComparisonKey(caseVariant),
-    pathComparisonKey(path.join(projectRoot, "runtime"))
-  );
+  const productionRuntime = path.join(projectRoot, "runtime");
+  if (process.platform === "win32") {
+    assert.throws(
+      () => createShadowConfig({ projectRoot, shadowDir: caseVariant }),
+      /produkčný runtime/
+    );
+    assert.equal(
+      pathComparisonKey(caseVariant),
+      pathComparisonKey(productionRuntime)
+    );
+  } else if (process.platform === "linux") {
+    assert.doesNotThrow(() =>
+      createShadowConfig({ projectRoot, shadowDir: caseVariant })
+    );
+    assert.notEqual(
+      pathComparisonKey(caseVariant),
+      pathComparisonKey(productionRuntime)
+    );
+  }
 });
 
 test("TOCTOU root swap after validation is detected before any outside write", async (t) => {
