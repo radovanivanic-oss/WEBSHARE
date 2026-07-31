@@ -47,6 +47,7 @@ const API_LOGIN_URL = `${BASE_URL}/api/login/`;
 const SEARCH_URL = WEBSHARE_SEARCH_ENDPOINT;
 const FILE_LINK_URL = `${BASE_URL}/api/file_link/`;
 const FILE_EXISTS_URL = `${BASE_URL}/api/file_exists/`;
+const FILE_INFO_URL = `${BASE_URL}/api/file_info/`;
 const SEARCH_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
 const MIN_VIDEO_SIZE = 1;
 const MAX_VIDEO_SIZE = Number.MAX_SAFE_INTEGER;
@@ -1134,6 +1135,20 @@ class WebshareSession {
       }
       return { exists: String(body.exists[0]) === "1", status: Number(response.status) || 200 };
     }, { signal });
+  }
+
+  async fileInfo(ident, options = {}) {
+    if (typeof ident !== "string" || ident.length === 0 || ident.length > 256 || /[\u0000-\u001f\u007f]/u.test(ident)) throw Object.assign(new Error("Invalid file_info ident"), { code: "CLIENT_REQUEST_ERROR", retryable: false });
+    return this.withWst(async (wst) => {
+      const meter = options.requestMeter || this.requestMeter;
+      meter?.beforeRequest("file_info", `file_info:${ident}`);
+      let response;
+      try { response = await (this.apiClient || createApiClient()).post(FILE_INFO_URL, new URLSearchParams({ ident, maybe_removed: "1", wst }).toString(), { signal: options.signal, maxContentLength: 64 * 1024, maxBodyLength: 64 * 1024 }); meter?.afterRequest(); }
+      catch (error) { meter?.afterRequest(); throw normalizeFilesExistTransportError(error); }
+      if (!String(response.headers?.["content-type"] || "").toLowerCase().includes("xml")) throw Object.assign(new Error("Unsupported file_info response"), { code: "UNSUPPORTED_RESPONSE", retryable: false });
+      let parsed; try { parsed = await parseStringPromise(response.data, { explicitArray: true, trim: true, strict: true }); } catch { throw Object.assign(new Error("Malformed file_info XML"), { code: "MALFORMED_RESPONSE", retryable: false }); }
+      return parseStatus(parsed, "file_info");
+    }, { signal: options.signal });
   }
 }
 
