@@ -11,6 +11,7 @@ const {
   createDiscoveryConfig,
   runHybridDiscovery,
 } = require("../lib/discovery/hybrid-discovery");
+const { MAX_LOG_BYTES } = require("../lib/discovery/staging-store");
 const {
   parseArguments,
 } = require("../scripts/run-hybrid-discovery");
@@ -211,6 +212,143 @@ test("hybrid discovery creates only isolated staging with manifest, checkpoint a
     fs.readdirSync(current.stagingDir).some((name) => name.startsWith(".tmp-")),
     false
   );
+  assertProductionUnchanged(current);
+});
+
+test("hybrid discovery persists bounded page observability without raw payloads", async (t) => {
+  const current = fixture(t, "observability");
+  const config = configFor(current, { pageSize: 3, maxPages: 3 });
+  let calls = 0;
+  const result = await runHybridDiscovery(config, {
+    async authenticate({ requestMeter }) {
+      requestMeter.beforeRequest("login", "salt");
+      requestMeter.afterRequest();
+      requestMeter.beforeRequest("login", "login");
+      requestMeter.afterRequest();
+      return "fixture-wst";
+    },
+    async fetchSearchPage(request) {
+      request.requestMeter.beforeRequest("search", `search:${request.offset}`);
+      request.requestMeter.afterRequest();
+      calls += 1;
+      return calls === 1
+        ? {
+            total: "42",
+            files: [
+              { ident: ["alpha"], name: "must-not-be-persisted.mkv" },
+              { ident: ["beta"], description: "must-not-be-persisted" },
+              { ident: ["alpha"] },
+            ],
+          }
+        : {
+            version: "v1",
+            files: [{ ident: ["beta"] }, { ident: ["gamma"] }],
+          };
+    },
+  });
+
+  const manifest = JSON.parse(fs.readFileSync(config.paths.manifest, "utf8"));
+  const checkpoint = JSON.parse(
+    fs.readFileSync(config.paths.checkpoint, "utf8")
+  );
+  const log = fs.readFileSync(config.paths.log, "utf8");
+  assert.equal(result.manifest.finished_reason, "source_exhausted");
+  assert.equal(manifest.page_metrics.length, 2);
+  assert.deepEqual(
+    manifest.page_metrics.map((page) => ({
+      offset: page.offset,
+      page_index: page.page_index,
+      returned: page.returned,
+      unique_idents_on_page: page.unique_idents_on_page,
+      duplicate_idents_on_page: page.duplicate_idents_on_page,
+      cumulative_unique_idents: page.cumulative_unique_idents,
+      request_sequence: page.request_sequence,
+      reported_total: page.reported_total,
+      overlap_with_previous_page: page.overlap_with_previous_page,
+      overlap_percentage: page.overlap_percentage,
+      cumulative_duplicates: page.cumulative_duplicates,
+    })),
+    [
+      {
+        offset: 0,
+        page_index: 1,
+        returned: 3,
+        unique_idents_on_page: 2,
+        duplicate_idents_on_page: 1,
+        cumulative_unique_idents: 2,
+        request_sequence: 3,
+        reported_total: "42",
+        overlap_with_previous_page: 0,
+        overlap_percentage: 0,
+        cumulative_duplicates: 1,
+      },
+      {
+        offset: 3,
+        page_index: 2,
+        returned: 2,
+        unique_idents_on_page: 2,
+        duplicate_idents_on_page: 1,
+        cumulative_unique_idents: 3,
+        request_sequence: 4,
+        reported_total: null,
+        overlap_with_previous_page: 1,
+        overlap_percentage: 50,
+        cumulative_duplicates: 2,
+      },
+    ]
+  );
+  for (const page of manifest.page_metrics) {
+    assert.match(page.timestamp, /^2026|^20/u);
+    assert.equal(page.decode_duration_ms, null);
+    assert.equal(typeof page.request_duration_ms, "number");
+    assert.equal(typeof page.total_processing_duration_ms, "number");
+    assert.equal(page.response_keys.includes("files"), true);
+    assert.equal(typeof page.response_schema_fingerprint, "string");
+    assert.equal(page.response_schema_fingerprint.length, 64);
+  }
+  assert.equal(manifest.page_metrics[0].response_version, null);
+  assert.equal(manifest.page_metrics[1].response_version, "v1");
+  assert.deepEqual(checkpoint.page_metrics, manifest.page_metrics);
+  assert.equal(manifest.observability.pages_processed, 2);
+  assert.equal(manifest.observability.requests_performed, 4);
+  assert.equal(manifest.observability.unique_idents, 3);
+  assert.equal(manifest.observability.duplicates, 2);
+  assert.equal(manifest.observability.overlap, 1);
+  assert.equal(typeof manifest.observability.average_page_duration_ms, "number");
+  assert.equal(typeof manifest.observability.total_duration_ms, "number");
+  assert.equal(log.includes("must-not-be-persisted"), false);
+  assert.equal(fs.statSync(config.paths.log).size <= MAX_LOG_BYTES, true);
+  assertProductionUnchanged(current);
+});
+
+test("hybrid discovery resumes a legacy checkpoint without observability fields", async (t) => {
+  const current = fixture(t, "observability-compat");
+  const config = configFor(current, { pageSize: 2 });
+  const controller = new AbortController();
+  const dependencies = dependenciesFor(
+    new Map([
+      [0, [{ ident: ["one"] }]],
+      [2, [{ ident: ["two"] }]],
+    ])
+  );
+  const originalFetch = dependencies.fetchSearchPage;
+  dependencies.fetchSearchPage = async (request) => {
+    const page = await originalFetch(request);
+    if (request.offset === 0) controller.abort(new Error("legacy stop"));
+    return page;
+  };
+  await runHybridDiscovery(config, dependencies, { signal: controller.signal });
+  const checkpoint = JSON.parse(fs.readFileSync(config.paths.checkpoint, "utf8"));
+  delete checkpoint.page_metrics;
+  delete checkpoint.previous_page_idents;
+  fs.writeFileSync(config.paths.checkpoint, `${JSON.stringify(checkpoint)}\n`);
+  const resumed = await runHybridDiscovery(
+    config,
+    dependenciesFor(new Map([[2, [{ ident: ["two"] }]]])),
+    { resume: true }
+  );
+  assert.equal(resumed.manifest.enumeration_complete, false);
+  assert.equal(Array.isArray(resumed.checkpoint.page_metrics), true);
   assertProductionUnchanged(current);
 });
 
