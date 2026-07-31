@@ -46,6 +46,7 @@ const SALT_URL = `${BASE_URL}/api/salt/`;
 const API_LOGIN_URL = `${BASE_URL}/api/login/`;
 const SEARCH_URL = WEBSHARE_SEARCH_ENDPOINT;
 const FILE_LINK_URL = `${BASE_URL}/api/file_link/`;
+const FILE_EXISTS_URL = `${BASE_URL}/api/file_exists/`;
 const SEARCH_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
 const MIN_VIDEO_SIZE = 1;
 const MAX_VIDEO_SIZE = Number.MAX_SAFE_INTEGER;
@@ -1074,6 +1075,81 @@ class WebshareSession {
       }
     }
   }
+
+  async filesExist(ident, options = {}) {
+    if (typeof ident !== "string" || ident.length === 0 || ident.length > 256 || /[\u0000-\u001f\u007f]/u.test(ident)) {
+      const error = new Error("Invalid files_exist ident");
+      error.code = "CLIENT_REQUEST_ERROR";
+      error.retryable = false;
+      throw error;
+    }
+    const signal = options.signal;
+    return this.withWst(async (wst) => {
+      const params = new URLSearchParams({ ident, wst });
+      const requestMeter = options.requestMeter || this.requestMeter;
+      requestMeter?.beforeRequest("files_exist", `files_exist:${ident}`);
+      let response;
+      try {
+        response = await (this.apiClient || createApiClient()).post(FILE_EXISTS_URL, params.toString(), {
+          signal,
+          maxContentLength: 64 * 1024,
+          maxBodyLength: 64 * 1024,
+        });
+        requestMeter?.afterRequest();
+      } catch (error) {
+        requestMeter?.afterRequest();
+        const mapped = normalizeFilesExistTransportError(error);
+        throw mapped;
+      }
+      const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
+      if (!contentType.includes("xml")) {
+        const error = new Error("Unsupported files_exist response content type");
+        error.code = "UNSUPPORTED_RESPONSE";
+        error.retryable = false;
+        throw error;
+      }
+      let parsed;
+      try {
+        parsed = await parseStringPromise(response.data, { explicitArray: true, trim: true, strict: true });
+      } catch {
+        const error = new Error("Malformed files_exist XML response");
+        error.code = "MALFORMED_RESPONSE";
+        error.retryable = false;
+        throw error;
+      }
+      const body = parsed?.response;
+      if (!body || body.status?.length !== 1 || body.status[0] !== "OK") {
+        const code = body?.code?.length === 1 ? String(body.code[0]).slice(0, 64) : "UNKNOWN_API_STATUS";
+        const error = new Error("Webshare files_exist API error");
+        error.code = /ACCESS|TOKEN|AUTH/i.test(code) ? "AUTHENTICATION_ERROR" : code;
+        error.retryable = ["429", "RATE_LIMITED"].includes(code) || /^5/.test(String(response.status));
+        error.status = response.status || null;
+        throw error;
+      }
+      if (!Array.isArray(body.exists) || body.exists.length !== 1 || !["0", "1"].includes(String(body.exists[0]))) {
+        const error = new Error("Malformed files_exist exists field");
+        error.code = "MALFORMED_RESPONSE";
+        error.retryable = false;
+        throw error;
+      }
+      return { exists: String(body.exists[0]) === "1", status: Number(response.status) || 200 };
+    }, { signal });
+  }
+}
+
+function normalizeFilesExistTransportError(error) {
+  const mapped = new Error("files_exist transport error");
+  const status = error?.response?.status || error?.status || null;
+  if (error?.code === "ECONNABORTED" || error?.code === "ETIMEDOUT") mapped.code = "TIMEOUT";
+  else if (["ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED"].includes(error?.code)) mapped.code = "NETWORK_ERROR";
+  else if (status === 429) mapped.code = "RATE_LIMITED";
+  else if (status === 401 || status === 403) mapped.code = "AUTHENTICATION_ERROR";
+  else if (status >= 500) mapped.code = "SERVER_ERROR";
+  else if (status >= 400) mapped.code = "CLIENT_REQUEST_ERROR";
+  else mapped.code = error?.code || "NETWORK_ERROR";
+  mapped.status = status;
+  mapped.retryable = ["TIMEOUT", "NETWORK_ERROR", "RATE_LIMITED", "SERVER_ERROR"].includes(mapped.code);
+  return mapped;
 }
 
 async function postXml(
