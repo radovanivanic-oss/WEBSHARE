@@ -508,6 +508,305 @@ test("discovery checkpoint resumes only the same isolated run after operator abo
   assertProductionUnchanged(current);
 });
 
+test("resume rejects configuration drift, corrupt state, missing artifacts and locks", async (t) => {
+  const current = fixture(t, "resume-rejections");
+  const config = configFor(current, { pageSize: 2, maxPages: 4 });
+  const controller = new AbortController();
+  const dependencies = dependenciesFor(
+    new Map([[0, [{ ident: ["one"] }]]])
+  );
+  const fetch = dependencies.fetchSearchPage;
+  dependencies.fetchSearchPage = async (request) => {
+    const page = await fetch(request);
+    controller.abort(new Error("deterministic stop"));
+    return page;
+  };
+  await runHybridDiscovery(config, dependencies, { signal: controller.signal });
+
+  await assert.rejects(
+    runHybridDiscovery(
+      createDiscoveryConfig({
+        projectRoot: current.projectRoot,
+        stagingDir: current.stagingDir,
+        what: "different",
+        limits: config.limits,
+      }),
+      dependenciesFor(new Map()),
+      { resume: true }
+    ),
+    /konfigurácia/
+  );
+  await assert.rejects(
+    runHybridDiscovery(
+      createDiscoveryConfig({
+        projectRoot: current.projectRoot,
+        stagingDir: current.stagingDir,
+        what: "test",
+        limits: { ...config.limits, maxPages: 3 },
+      }),
+      dependenciesFor(new Map()),
+      { resume: true }
+    ),
+    /konfigurácia/
+  );
+  await assert.rejects(
+    runHybridDiscovery(
+      createDiscoveryConfig({
+        projectRoot: current.projectRoot,
+        stagingDir: path.join(current.runtime, "hybrid-discovery-other"),
+        what: "test",
+        limits: config.limits,
+      }),
+      dependenciesFor(new Map()),
+      { resume: true }
+    ),
+    /existujúci staging root/
+  );
+  assert.throws(
+    () =>
+      createDiscoveryConfig({
+        projectRoot: current.projectRoot,
+        stagingDir: current.stagingDir,
+        what: "test",
+        category: "audio",
+      }),
+    /iba category=video/
+  );
+  assert.throws(
+    () =>
+      createDiscoveryConfig({
+        projectRoot: current.projectRoot,
+        stagingDir: current.stagingDir,
+        what: "test",
+        sort: "largest",
+      }),
+    /iba sort=recent/
+  );
+
+  const originalCheckpoint = fs.readFileSync(config.paths.checkpoint, "utf8");
+  fs.writeFileSync(config.paths.checkpoint, "{corrupt");
+  await assert.rejects(
+    runHybridDiscovery(config, dependenciesFor(new Map()), { resume: true }),
+    /JSON|checkpoint/i
+  );
+  fs.writeFileSync(config.paths.checkpoint, originalCheckpoint);
+
+  const originalManifest = fs.readFileSync(config.paths.manifest, "utf8");
+  fs.writeFileSync(config.paths.manifest, "{corrupt");
+  await assert.rejects(
+    runHybridDiscovery(config, dependenciesFor(new Map()), { resume: true }),
+    /JSON|manifest/i
+  );
+  fs.writeFileSync(config.paths.manifest, originalManifest);
+
+  const snapshot = fs.readFileSync(config.paths.idents, "utf8");
+  fs.unlinkSync(config.paths.idents);
+  await assert.rejects(
+    runHybridDiscovery(config, dependenciesFor(new Map()), { resume: true }),
+    /ident snapshot|ENOENT/i
+  );
+  fs.writeFileSync(config.paths.idents, snapshot);
+
+  const checkpoint = fs.readFileSync(config.paths.checkpoint, "utf8");
+  fs.unlinkSync(config.paths.checkpoint);
+  await assert.rejects(
+    runHybridDiscovery(config, dependenciesFor(new Map()), { resume: true }),
+    /checkpoint|ENOENT/i
+  );
+  fs.writeFileSync(config.paths.checkpoint, checkpoint);
+
+  fs.writeFileSync(config.paths.lock, "{\"run_id\":\"other\"}\n");
+  await assert.rejects(
+    runHybridDiscovery(config, dependenciesFor(new Map()), { resume: true }),
+    /lock už existuje/
+  );
+  fs.unlinkSync(config.paths.lock);
+  assertProductionUnchanged(current);
+});
+
+test("interrupted resume preserves offsets, counters, idents and bounded log continuity", async (t) => {
+  const interruptedCurrent = fixture(t, "resume-deterministic");
+  const uninterruptedCurrent = fixture(t, "resume-baseline");
+  const limits = { pageSize: 2, maxPages: 3, maxRequests: 10 };
+  const pages = new Map([
+    [0, [{ ident: ["one"] }, { ident: ["two"] }]],
+    [2, [{ ident: ["three"] }, { ident: ["four"] }]],
+    [4, [{ ident: ["five"] }]],
+  ]);
+  const uninterruptedConfig = configFor(uninterruptedCurrent, limits);
+  const uninterrupted = await runHybridDiscovery(
+    uninterruptedConfig,
+    dependenciesFor(pages)
+  );
+
+  const interruptedConfig = configFor(interruptedCurrent, limits);
+  const controller = new AbortController();
+  const firstObservations = {};
+  firstObservations.onReserved = (request) => {
+    firstObservations.reservedOffsets ||= [];
+    firstObservations.reservedOffsets.push(request.offset);
+  };
+  const firstDependencies = dependenciesFor(pages, firstObservations);
+  const firstFetch = firstDependencies.fetchSearchPage;
+  firstDependencies.fetchSearchPage = async (request) => {
+    if (request.offset === 2) {
+      controller.abort(new Error("stop after page 1"));
+    }
+    const page = await firstFetch(request);
+    return page;
+  };
+  const interrupted = await runHybridDiscovery(
+    interruptedConfig,
+    firstDependencies,
+    { signal: controller.signal }
+  );
+  assert.equal(interrupted.manifest.finished_reason, "operator_aborted");
+  const resumeObservations = {};
+  resumeObservations.onReserved = (request) => {
+    resumeObservations.reservedOffsets ||= [];
+    resumeObservations.reservedOffsets.push(request.offset);
+  };
+  const resumed = await runHybridDiscovery(
+    interruptedConfig,
+    dependenciesFor(pages, resumeObservations),
+    { resume: true }
+  );
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(interruptedConfig.paths.idents, "utf8")).idents,
+    JSON.parse(fs.readFileSync(uninterruptedConfig.paths.idents, "utf8")).idents
+  );
+  assert.deepEqual(
+    {
+      pages: resumed.manifest.pages_scanned,
+      idents: resumed.manifest.new_idents,
+      duplicates: resumed.manifest.duplicate_idents,
+      offsets: resumed.manifest.page_metrics.map((page) => page.offset),
+    },
+    {
+      pages: uninterrupted.manifest.pages_scanned,
+      idents: uninterrupted.manifest.new_idents,
+      duplicates: uninterrupted.manifest.duplicate_idents,
+      offsets: uninterrupted.manifest.page_metrics.map((page) => page.offset),
+    }
+  );
+  assert.deepEqual(
+    firstObservations.reservedOffsets,
+    [0]
+  );
+  assert.deepEqual(
+    resumeObservations.reservedOffsets,
+    [2, 4]
+  );
+  assert.equal(
+    resumed.manifest.requests_used,
+    interrupted.manifest.requests_used + 4
+  );
+  assert.equal(resumed.manifest.requests_completed, resumed.manifest.requests_used);
+  assert.equal(resumed.manifest.enumeration_complete, false);
+  assert.equal(fs.statSync(interruptedConfig.paths.log).size <= MAX_LOG_BYTES, true);
+  assertProductionUnchanged(interruptedCurrent);
+  assertProductionUnchanged(uninterruptedCurrent);
+});
+
+test("deterministic interruption after one, two and three reserved requests is recoverable", async (t) => {
+  for (const stopAfter of [1, 2, 3]) {
+    await t.test(`after ${stopAfter} request(s)`, async (t) => {
+      const current = fixture(t, `request-stop-${stopAfter}`);
+      const config = configFor(current, { pageSize: 2, maxRequests: 10 });
+      const controller = new AbortController();
+      let reserved = 0;
+      const dependencies = {
+        async authenticate({ requestMeter }) {
+          requestMeter.beforeRequest("login", "salt");
+          requestMeter.afterRequest();
+          reserved += 1;
+          if (reserved === stopAfter) controller.abort(new Error("stop"));
+          requestMeter.beforeRequest("login", "login");
+          requestMeter.afterRequest();
+          reserved += 1;
+          if (reserved === stopAfter) controller.abort(new Error("stop"));
+          return "fixture-wst";
+        },
+        async fetchSearchPage(request) {
+          request.requestMeter.beforeRequest("search", "search");
+          request.requestMeter.afterRequest();
+          reserved += 1;
+          if (reserved === stopAfter) controller.abort(new Error("stop"));
+          return {
+            total: "100",
+            files: [{ ident: [request.offset === 0 ? "one" : "two"] }],
+          };
+        },
+      };
+      const interrupted = await runHybridDiscovery(config, dependencies, {
+        signal: controller.signal,
+      });
+      assert.equal(interrupted.manifest.finished_reason, "operator_aborted");
+      assert.equal(interrupted.checkpoint.requests_used, stopAfter);
+      const resumed = await runHybridDiscovery(
+        config,
+        {
+          authenticate: dependencies.authenticate,
+          fetchSearchPage: async (request) => {
+            request.requestMeter.beforeRequest("search", "search-resume");
+            request.requestMeter.afterRequest();
+            return {
+              total: "100",
+              files: [{ ident: [request.offset === 0 ? "one" : "two"] }],
+            };
+          },
+        },
+        { resume: true }
+      );
+      assert.equal(resumed.manifest.requests_completed, resumed.manifest.requests_used);
+      assert.equal(resumed.manifest.enumeration_complete, false);
+      const idents = JSON.parse(fs.readFileSync(config.paths.idents, "utf8"));
+      assert.equal(new Set(idents.idents).size, idents.idents.length);
+      assertProductionUnchanged(current);
+    });
+  }
+});
+
+test("atomic persistence hooks leave readable artifacts at each interruption boundary", async (t) => {
+  for (const stage of [
+    "before_snapshot_write",
+    "after_snapshot_write",
+    "before_checkpoint_write",
+    "after_checkpoint_write",
+    "before_manifest_write",
+    "after_manifest_write",
+    "before_log_write",
+    "after_log_write",
+  ]) {
+    await t.test(stage, async (t) => {
+      const current = fixture(t, `atomic-${stage}`);
+      const config = configFor(current, { pageSize: 1, maxPages: 1 });
+      const controller = new AbortController();
+      let fired = false;
+      const hooks = {
+        [stage]() {
+          if (!fired) {
+            fired = true;
+            controller.abort(new Error(`interrupt ${stage}`));
+          }
+        },
+      };
+      await runHybridDiscovery(
+        config,
+        dependenciesFor(new Map([[0, [{ ident: ["atomic"] }]]])),
+        { signal: controller.signal, testHooks: hooks }
+      );
+      assert.doesNotThrow(() => JSON.parse(fs.readFileSync(config.paths.checkpoint, "utf8")));
+      assert.doesNotThrow(() => JSON.parse(fs.readFileSync(config.paths.manifest, "utf8")));
+      assert.doesNotThrow(() => JSON.parse(fs.readFileSync(config.paths.idents, "utf8")));
+      for (const line of fs.readFileSync(config.paths.log, "utf8").trim().split("\n")) {
+        assert.doesNotThrow(() => JSON.parse(line));
+      }
+      assertProductionUnchanged(current);
+    });
+  }
+});
+
 test("hybrid discovery CLI and staging guard reject unsafe or expanded behavior", (t) => {
   const current = fixture(t, "guard");
   const parsed = parseArguments([
