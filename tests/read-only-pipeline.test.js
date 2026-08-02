@@ -57,3 +57,19 @@ test("B.17 corrupt, missing, mismatched, duplicate, missing and reordered contra
   const wrongCatalog = createSimulationConfig({ root: out.simulation.paths.root, planRecords: out.plan.records, metadataRecords: out.metadataSnapshot.records, sourcePlanDigest: simulationDigest(out.plan.records), catalogSnapshotDigest: "wrong" }); assert.throws(() => runImportSimulation(wrongCatalog, { resume: true }), /mismatch/);
   const reordered = [...out.classifications.records].reverse(); assert.notEqual(planDigest(reordered), out.planningManifest.input_digest);
 });
+
+test("B.17B maps every metadata status and bypasses non-insert plans", (t) => {
+  const root = fixture(t), catalog = "c".repeat(64), plans = ["ready", "incomplete", "unavailable", "retry", "error", "invalid", "skip"].map((ident, index) => ({ ident, planned_action: index === 6 ? "SKIP_NOT_ELIGIBLE" : "PLAN_INSERT", reason: "mock", catalog_snapshot_digest: catalog }));
+  const base = (ident, metadata_status, fields = {}) => ({ ident, original_name: "movie.mkv", normalized_name: "movie-mkv", first_seen_at: "2026-01-01T00:00:00.000Z", last_seen_at: "2026-01-01T00:00:00.000Z", parse_version: "test", raw_json: "{}", metadata_status, ...fields });
+  const metadata = [base("ready", "METADATA_READY"), base("incomplete", "METADATA_INCOMPLETE", { original_name: null, normalized_name: null, first_seen_at: null, last_seen_at: null, parse_version: null, raw_json: null }), base("unavailable", "NOT_AVAILABLE"), base("retry", "RETRY_LATER"), base("error", "TRANSPORT_ERROR"), base("invalid", "INVALID_INPUT")];
+  const config = createSimulationConfig({ root, planRecords: plans, metadataRecords: metadata, sourcePlanDigest: simulationDigest(plans), catalogSnapshotDigest: catalog }); const manifest = runImportSimulation(config), readiness = json(config.paths.readiness).records, output = json(config.paths.records).records;
+  assert.deepEqual(readiness.map((record) => record.readiness), ["INSERT_READY", "MISSING_REQUIRED_FIELDS", "BLOCKED", "BLOCKED", "BLOCKED", "BLOCKED", "NOT_APPLICABLE"]); assert.equal(manifest.insert_ready, 1); assert.equal(manifest.missing_required_fields, 1); assert.equal(output[6].simulation_action, "BLOCKED"); assert.equal(output[6].metadata_status, null);
+});
+
+test("B.17B metadata artifacts and simulation metadata contracts fail closed", async (t) => {
+  const root = fixture(t), config = createCandidateMetadataConfig({ root: path.join(root, "metadata"), idents: ["one", "two"], limits: { maxCandidates: 2, maxRequests: 2 } }); await runCandidateMetadata(config, { fileInfo: async () => ({ name: ["x.mkv"], available: ["1"], removed: ["0"] }) }, { stopAfter: 1 });
+  for (const file of [config.paths.snapshot, config.paths.manifest, config.paths.checkpoint]) { const copy = fs.readFileSync(file); fs.unlinkSync(file); await assert.rejects(runCandidateMetadata(config, { fileInfo: async () => ({}) }, { resume: true })); fs.writeFileSync(file, copy); }
+  const corrupt = json(config.paths.snapshot); corrupt.records[0].unknown = "secret"; fs.writeFileSync(config.paths.snapshot, JSON.stringify(corrupt)); await assert.rejects(runCandidateMetadata(config, { fileInfo: async () => ({}) }, { resume: true }), /mismatch/);
+  const plan = [{ ident: "one", planned_action: "PLAN_INSERT", reason: "mock", catalog_snapshot_digest: "c" }], metadata = json(config.paths.snapshot).records;
+  assert.throws(() => createSimulationConfig({ root: path.join(root, "bad"), planRecords: plan, metadataRecords: [...metadata, ...metadata], sourcePlanDigest: "p", catalogSnapshotDigest: "c" })); assert.throws(() => createSimulationConfig({ root: path.join(root, "missing"), planRecords: plan, metadataRecords: [], sourcePlanDigest: "p", catalogSnapshotDigest: "c" })); assert.throws(() => createSimulationConfig({ root: path.join(root, "unexpected"), planRecords: plan, metadataRecords: [{ ...metadata[0], ident: "other" }], sourcePlanDigest: "p", catalogSnapshotDigest: "c" }));
+});
