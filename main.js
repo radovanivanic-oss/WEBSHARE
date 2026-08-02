@@ -1146,8 +1146,13 @@ class WebshareSession {
       try { response = await (this.apiClient || createApiClient()).post(FILE_INFO_URL, new URLSearchParams({ ident, maybe_removed: "1", wst }).toString(), { signal: options.signal, maxContentLength: 64 * 1024, maxBodyLength: 64 * 1024 }); meter?.afterRequest(); }
       catch (error) { meter?.afterRequest(); throw normalizeFilesExistTransportError(error); }
       if (!String(response.headers?.["content-type"] || "").toLowerCase().includes("xml")) throw Object.assign(new Error("Unsupported file_info response"), { code: "UNSUPPORTED_RESPONSE", retryable: false });
+      if (Buffer.byteLength(String(response.data || ""), "utf8") > 64 * 1024) throw Object.assign(new Error("Oversized file_info response"), { code: "UNSUPPORTED_RESPONSE", retryable: false });
       let parsed; try { parsed = await parseStringPromise(response.data, { explicitArray: true, trim: true, strict: true }); } catch { throw Object.assign(new Error("Malformed file_info XML"), { code: "MALFORMED_RESPONSE", retryable: false }); }
-      return parseStatus(parsed, "file_info");
+      const body = parseStatus(parsed, "file_info");
+      const value = (field) => Array.isArray(body[field]) && body[field].length === 1 ? String(body[field][0]) : null;
+      const available = value("available"), removed = value("removed");
+      if (value("name") === null || !["0", "1"].includes(available) || !["0", "1"].includes(removed) || (available === "1" && removed === "1")) throw Object.assign(new Error("Malformed file_info response fields"), { code: "MALFORMED_RESPONSE", retryable: false });
+      return body;
     }, { signal: options.signal });
   }
 }
@@ -1161,7 +1166,7 @@ function normalizeFilesExistTransportError(error) {
   else if (status === 401 || status === 403) mapped.code = "AUTHENTICATION_ERROR";
   else if (status >= 500) mapped.code = "SERVER_ERROR";
   else if (status >= 400) mapped.code = "CLIENT_REQUEST_ERROR";
-  else mapped.code = error?.code || "NETWORK_ERROR";
+  else mapped.code = "NETWORK_ERROR";
   mapped.status = status;
   mapped.retryable = ["TIMEOUT", "NETWORK_ERROR", "RATE_LIMITED", "SERVER_ERROR"].includes(mapped.code);
   return mapped;
