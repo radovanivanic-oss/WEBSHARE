@@ -11,6 +11,7 @@ const {
   normalizeMetadata,
   runCandidateMetadata,
 } = require("../lib/discovery/candidate-metadata");
+const { parseMediaName } = require("../lib/media-name-parser");
 
 function root(t) {
   const value = fs.mkdtempSync(path.join(os.tmpdir(), "metadata-"));
@@ -47,8 +48,23 @@ function assertSafeError(record) {
 test("normalizes complete metadata into approved bounded fields", () => {
   const record = normalizeMetadata("id", response({ name: ["Movie.2024.mkv"], type: ["mkv"], size: ["123"] }), "2026-01-01T00:00:00.000Z");
   assert.equal(record.metadata_status, "METADATA_READY");
-  assert.equal(record.normalized_name, "movie-2024-mkv");
+  assert.equal(record.normalized_name, "Movie 2024");
   assert.doesNotMatch(record.raw_json, /url|token|password/i);
+});
+
+test("metadata normalized_name exactly uses the production parser representation", () => {
+  const names = [
+    "Dune.Part.Two.2024.2160p.WEB-DL.DV.HDR.HEVC.CZ.EN.mkv",
+    "The.Last.of.Us.S01E03.1080p.WEB-DL.x265.CZ.EN.mkv",
+    "Život.je.krásny.1997.1080p.mkv",
+    "Spider-Man: No Way Home (2021) - EXTENDED.mkv",
+    "Blade.Runner.1982.Final.Cut.2160p.mkv",
+  ];
+  for (const name of names) {
+    const record = normalizeMetadata("id", response({ name: [name], type: ["mkv"] }), "2026-01-01T00:00:00.000Z");
+    assert.equal(record.normalized_name, parseMediaName(name, { extension: "mkv" }).normalizedName, name);
+    assert.equal(record.metadata_status, "METADATA_READY", name);
+  }
 });
 
 test("candidate metadata maps adapter outcomes to stable statuses and persists only approved fields", async (t) => {
@@ -86,4 +102,17 @@ test("interruption resumes without duplicate records and rejects mismatches", as
   await assert.rejects(runCandidateMetadata(createCandidateMetadataConfig({ root: value, idents: ["a", "c"], limits: { maxCandidates: 2, maxRequests: 2 } }), session, { resume: true }), /mismatch/);
   fs.writeFileSync(config.paths.manifest, "{}");
   await assert.rejects(runCandidateMetadata(config, session, { resume: true }));
+});
+
+test("legacy metadata schema is explicitly rejected rather than reinterpreted", async (t) => {
+  const value = root(t);
+  const config = createCandidateMetadataConfig({ root: value, idents: ["a", "b"], limits: { maxCandidates: 2, maxRequests: 2 } });
+  const session = { fileInfo: async (ident) => response({ name: [`${ident}.mkv`] }) };
+  await runCandidateMetadata(config, session, { stopAfter: 1 });
+  for (const file of [config.paths.snapshot, config.paths.manifest, config.paths.checkpoint]) {
+    const artifact = JSON.parse(fs.readFileSync(file, "utf8")); artifact.schema_version = 1;
+    fs.writeFileSync(file, JSON.stringify(artifact));
+  }
+  await assert.rejects(runCandidateMetadata(config, session, { resume: true }), /legacy metadata artifacts require reprocessing/);
+  assert.doesNotMatch(fs.readFileSync(config.paths.log, "utf8"), /a\.mkv|normalized_name/i);
 });
