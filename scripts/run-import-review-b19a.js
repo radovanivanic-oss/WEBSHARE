@@ -21,6 +21,24 @@ const PAYLOAD_FIELDS = Object.freeze(["ident", "file", "parser", "classification
 const sha256 = value => crypto.createHash("sha256").update(value).digest("hex");
 const fileHash = file => sha256(fs.readFileSync(file));
 const readJson = file => JSON.parse(fs.readFileSync(file, "utf8"));
+function statIdentity(stat) { return { dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs }; }
+function sameIdentity(left, right) { return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs; }
+async function streamFileHash(file, options = {}) {
+  const stat = options.stat || fs.promises.stat;
+  const createReadStream = options.createReadStream || fs.createReadStream;
+  const before = await stat(file);
+  if (!before.isFile()) throw new Error("catalog snapshot is not a regular file");
+  const hash = crypto.createHash("sha256");
+  try {
+    for await (const chunk of createReadStream(file, { highWaterMark: 64 * 1024 })) {
+      hash.update(chunk);
+      if (options.onChunk) await options.onChunk(chunk);
+    }
+  } catch (error) { throw new Error(`catalog snapshot stream failed: ${error.message}`); }
+  const after = await stat(file);
+  if (!sameIdentity(statIdentity(before), statIdentity(after))) throw new Error("catalog snapshot changed while hashing");
+  return hash.digest("hex");
+}
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
@@ -91,7 +109,7 @@ function evaluate(record, lookup) {
   return { parsed, classification, reasons: [...new Set(reasons)].sort() };
 }
 function reviewDecision(reasons) { return reasons.some(reason => ["MISSING_REQUIRED_FIELD", "UNSUPPORTED_MEDIA_CLASSIFICATION"].includes(reason)) ? "BLOCKED" : reasons.length ? "REVIEW_REQUIRED" : "IMPORT_READY"; }
-function run(options) {
+async function run(options) {
   assertOutputRoot(options.outputDir);
   const source = validateMetadataSource(options.sourceMetadataDir);
   if (!fs.existsSync(options.catalogDb) || fs.lstatSync(options.catalogDb).isSymbolicLink()) throw new Error("unsafe catalog database");
@@ -117,8 +135,10 @@ function run(options) {
     const candidates = records.filter(record => record.review_decision === "IMPORT_READY").map(record => ({ ident: record.ident, file: Object.fromEntries(INSERT_COLUMNS.map(column => [column, record.values[column]])), parser: record.parser, classification: record.classification, playability: { is_playable_video: record.values.is_playable_video }, catalog_linkage: record.catalog_linkage, field_sources: record.field_sources, source_digests: { metadata: metadataDigest }, review_decision: record.review_decision, review_reasons: record.review_reasons }));
     const counts = Object.fromEntries(["IMPORT_READY", "REVIEW_REQUIRED", "BLOCKED"].map(decision => [decision, records.filter(record => record.review_decision === decision).length]));
     const reasonCounts = {}; for (const record of records) for (const reason of record.review_reasons) reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
+    // Hash before creating the output root: a failed read leaves no partial review artifact.
+    const catalogDigest = await streamFileHash(options.catalogDb, options.hashOptions);
     fs.mkdirSync(options.outputDir, { mode: 0o750 });
-    const reference = { schema_version: 2, source_metadata_digest: metadataDigest, source_hashes: source.hashes, catalog_snapshot_digest: fileHash(options.catalogDb), catalog_read_only: true };
+    const reference = { schema_version: 2, source_metadata_digest: metadataDigest, source_hashes: source.hashes, catalog_snapshot_digest: catalogDigest, catalog_read_only: true };
     const payload = { schema_version: 2, run_id: runId, fields: PAYLOAD_FIELDS, insert_columns: INSERT_COLUMNS, records: candidates, payload_digest: sha256(canonical(candidates)) };
     const manifest = { schema_version: 2, ...SAFETY, run_id: runId, source_metadata_digest: metadataDigest, source_catalog_snapshot_digest: reference.catalog_snapshot_digest, total_input: records.length, import_ready: counts.IMPORT_READY, review_required: counts.REVIEW_REQUIRED, blocked: counts.BLOCKED, reason_counts: reasonCounts, canonical_payload_digest: payload.payload_digest, finished_reason: "completed" };
     writeAtomic(path.join(options.outputDir, "source-reference.json"), reference);
@@ -131,5 +151,5 @@ function run(options) {
   return result;
 }
 const INSERT_ONLY_SQL_DESCRIPTION = Object.freeze({ operation: "INSERT", table: "files", columns: INSERT_COLUMNS, parameters: INSERT_COLUMNS.map(column => `@${column}`), conflict_policy: "ABORT_AND_ROLLBACK_ENTIRE_TRANSACTION", prohibited: ["UPDATE", "UPSERT", "REPLACE", "DELETE"] });
-if (require.main === module) { try { const result = run(parseArgs(process.argv.slice(2))); console.log(JSON.stringify({ run_id: result.run_id, import_ready: result.import_ready, review_required: result.review_required, blocked: result.blocked })); } catch (error) { console.error(error.message); process.exitCode = 1; } }
-module.exports = { INSERT_COLUMNS, INSERT_ONLY_SQL_DESCRIPTION, OUTPUT_FILES, PAYLOAD_FIELDS, SAFETY, SOURCE_TYPES, evaluate, parseArgs, reviewDecision, run, sourceMap };
+if (require.main === module) { run(parseArgs(process.argv.slice(2))).then(result => console.log(JSON.stringify({ run_id: result.run_id, import_ready: result.import_ready, review_required: result.review_required, blocked: result.blocked }))).catch(error => { console.error(error.message); process.exitCode = 1; }); }
+module.exports = { INSERT_COLUMNS, INSERT_ONLY_SQL_DESCRIPTION, OUTPUT_FILES, PAYLOAD_FIELDS, SAFETY, SOURCE_TYPES, evaluate, parseArgs, reviewDecision, run, sourceMap, streamFileHash };

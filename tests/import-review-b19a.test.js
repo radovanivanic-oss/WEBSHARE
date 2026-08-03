@@ -4,9 +4,10 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { Readable } = require("node:stream");
 const Database = require("better-sqlite3");
 const test = require("node:test");
-const { INSERT_COLUMNS, INSERT_ONLY_SQL_DESCRIPTION, PAYLOAD_FIELDS, SOURCE_TYPES, run, sourceMap } = require("../scripts/run-import-review-b19a");
+const { INSERT_COLUMNS, INSERT_ONLY_SQL_DESCRIPTION, PAYLOAD_FIELDS, SOURCE_TYPES, run, sourceMap, streamFileHash } = require("../scripts/run-import-review-b19a");
 const { parseMediaName } = require("../lib/media-name-parser");
 
 function hash(file) { return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
@@ -29,19 +30,20 @@ function fixture(t, changes = {}) {
 }
 function execute(f, timestamp = "20260803T100000Z") { return run({ sourceMetadataDir: f.source, catalogDb: f.dbFile, outputDir: path.join(f.runtime, `import-review-b19a-${timestamp}`) }); }
 
-test("B19A builds a deterministic allowlisted candidate payload from the production field contract", t => {
+test("B19A builds a deterministic allowlisted candidate payload from the production field contract", async t => {
   const f = fixture(t); const sourceHashes = Object.fromEntries(fs.readdirSync(f.source).map(name => [name, hash(path.join(f.source, name))]));
-  const first = execute(f); const out = path.join(f.runtime, "import-review-b19a-20260803T100000Z"); const payload = JSON.parse(fs.readFileSync(path.join(out, "import-candidate-payload.json")));
+  const databaseHash = hash(f.dbFile); const first = await execute(f); const out = path.join(f.runtime, "import-review-b19a-20260803T100000Z"); const payload = JSON.parse(fs.readFileSync(path.join(out, "import-candidate-payload.json")));
   assert.equal(first.import_ready, 22); assert.deepEqual(payload.fields, PAYLOAD_FIELDS); assert.deepEqual(payload.insert_columns, INSERT_COLUMNS); assert.equal(payload.records.length, 22);
   assert.deepEqual(Object.keys(payload.records[0]).sort(), [...PAYLOAD_FIELDS].sort()); assert.ok(!JSON.stringify(payload).match(/hunter2|wst=|token=|https?:\/\/|<response/i));
   for (const [name, before] of Object.entries(sourceHashes)) assert.equal(hash(path.join(f.source, name)), before);
-  const second = execute(f, "20260803T100001Z"); const secondPayload = JSON.parse(fs.readFileSync(path.join(f.runtime, "import-review-b19a-20260803T100001Z", "import-candidate-payload.json")));
+  const second = await execute(f, "20260803T100001Z"); const secondPayload = JSON.parse(fs.readFileSync(path.join(f.runtime, "import-review-b19a-20260803T100001Z", "import-candidate-payload.json")));
   assert.equal(second.canonical_payload_digest, first.canonical_payload_digest); assert.equal(secondPayload.payload_digest, payload.payload_digest);
+  assert.equal(hash(f.dbFile), databaseHash);
 });
 
-test("B19A strict review reasons block or review ambiguous unsafe metadata without fabricating fields", t => {
+test("B19A strict review reasons block or review ambiguous unsafe metadata without fabricating fields", async t => {
   const f = fixture(t, { records(records) { records[0] = record(0, "Test Movie 2024 1080p.mkv"); records[1] = record(1, "Same Movie 2024 1080p.mkv"); records[2] = record(2, "Same Movie 2024 720p.mkv"); records[3].size_bytes = null; records[4] = record(4, "Unknown title.mkv"); } });
-  execute(f); const review = JSON.parse(fs.readFileSync(path.join(f.runtime, "import-review-b19a-20260803T100000Z", "review-records.json")));
+  await execute(f); const review = JSON.parse(fs.readFileSync(path.join(f.runtime, "import-review-b19a-20260803T100000Z", "review-records.json")));
   const byIdent = new Map(review.records.map(value => [value.ident, value]));
   assert.ok(byIdent.get("id-0").review_reasons.includes("TEST_LIKE_CONTENT"));
   assert.ok(byIdent.get("id-1").review_reasons.includes("MULTI_VERSION_AMBIGUITY")); assert.ok(byIdent.get("id-2").review_reasons.includes("MULTI_VERSION_AMBIGUITY"));
@@ -56,8 +58,27 @@ test("field sources, parser playability and insert-only description are explicit
   assert.equal(INSERT_ONLY_SQL_DESCRIPTION.operation, "INSERT"); assert.ok(INSERT_ONLY_SQL_DESCRIPTION.parameters.every(value => value.startsWith("@"))); assert.ok(INSERT_ONLY_SQL_DESCRIPTION.prohibited.includes("UPSERT"));
 });
 
-test("B19A rejects corrupt source state and unsafe output roots before creating artifacts", t => {
+test("B19A rejects corrupt source state and unsafe output roots before creating artifacts", async t => {
   const f = fixture(t); fs.writeFileSync(path.join(f.source, "metadata.checkpoint.json"), JSON.stringify({ counters: { metadata_ready: 21 } }));
-  assert.throws(() => execute(f), /metadata source/); assert.equal(fs.readdirSync(f.runtime).length, 0);
-  assert.throws(() => run({ sourceMetadataDir: f.source, catalogDb: f.dbFile, outputDir: path.join(f.runtime, "bad") }), /unsafe output root/);
+  await assert.rejects(() => execute(f), /metadata source/); assert.equal(fs.readdirSync(f.runtime).length, 0);
+  await assert.rejects(() => run({ sourceMetadataDir: f.source, catalogDb: f.dbFile, outputDir: path.join(f.runtime, "bad") }), /unsafe output root/);
+});
+
+test("streamed catalog hash is bounded, deterministic and matches ordinary SHA-256", async t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "b19a-hash-")); t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const file = path.join(base, "fixture.bin"); fs.writeFileSync(file, Buffer.alloc(256 * 1024 + 37, 0x5a));
+  const expected = hash(file); const actual = await streamFileHash(file);
+  assert.equal(actual, expected); assert.equal(await streamFileHash(file), expected);
+  const original = fs.readFileSync; fs.readFileSync = () => { throw new Error("whole-file read forbidden"); };
+  try { assert.equal(await streamFileHash(file), expected); } finally { fs.readFileSync = original; }
+});
+
+test("streamed hash rejects missing, failing and changed inputs before review artifacts", async t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "b19a-hash-")); t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const file = path.join(base, "fixture.bin"); fs.writeFileSync(file, Buffer.alloc(128 * 1024, 1));
+  await assert.rejects(() => streamFileHash(path.join(base, "missing")), /ENOENT/);
+  await assert.rejects(() => streamFileHash(file, { createReadStream: () => Readable.from((async function* () { throw new Error("simulated stream fault"); })()) }), /stream failed/);
+  await assert.rejects(() => streamFileHash(file, { onChunk: async () => fs.appendFileSync(file, "x") }), /changed while hashing/);
+  const f = fixture(t); await assert.rejects(() => run({ sourceMetadataDir: f.source, catalogDb: f.dbFile, outputDir: path.join(f.runtime, "import-review-b19a-20260803T100000Z"), hashOptions: { createReadStream: () => { throw new Error("simulated stream fault"); } } }), /stream failed/);
+  assert.equal(fs.readdirSync(f.runtime).length, 0);
 });
