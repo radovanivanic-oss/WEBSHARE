@@ -15,6 +15,8 @@ Before `file_info` or import planning, stop unless all aggregate checks pass:
 | Unsupported media | at most 5% |
 | Valid video | at least 85% |
 
+Discovery evaluates the in-memory search items with the existing parser and classifier, then persists only per-page and cumulative integer counters (`items_evaluated`, valid-video, test-like, parser-low-confidence, unsupported-media, and invalid-quality-input). Rates are derived from these counters. It persists parser, classifier, and query-policy versions plus at most five reason codes. Names, raw items, URLs, owners, and raw responses are never written. A legacy root without this evidence is `NOT_EVALUABLE` and fails closed; its historical counts are never inferred.
+
 ## Ranked representative candidates
 
 These are catalog-derived seeds, not API results or completeness claims:

@@ -15,10 +15,25 @@ test("representative query policy rejects generic, wildcarded and unsafe queries
 });
 
 test("quality gate stops before metadata or planning on conservative failures", () => {
-  const pass = qualityGate({ total: 100, test_like: 1, parser_low_confidence: 10, unsupported_media: 5, valid_video: 85 });
+  const pass = qualityGate({ items_evaluated: 100, test_like_count: 1, parser_low_confidence_count: 10, unsupported_media_count: 5, valid_video_count: 85, invalid_quality_input_count: 0 });
   assert.equal(pass.passed, true); assert.equal(pass.stop_before_file_info, false);
-  const failed = qualityGate({ total: 100, test_like: 2, parser_low_confidence: 11, unsupported_media: 6, valid_video: 84 });
+  const failed = qualityGate({ items_evaluated: 100, test_like_count: 2, parser_low_confidence_count: 11, unsupported_media_count: 6, valid_video_count: 84, invalid_quality_input_count: 0 });
   assert.equal(failed.passed, false); assert.deepEqual(failed.failures, ["TEST_LIKE_RATE_EXCEEDED", "PARSER_LOW_CONFIDENCE_RATE_EXCEEDED", "UNSUPPORTED_MEDIA_RATE_EXCEEDED", "VALID_VIDEO_RATE_TOO_LOW"]); assert.equal(failed.stop_before_import_planning, true);
+});
+
+test("quality gate is not evaluable for an empty page", () => {
+  const result = qualityGate({ items_evaluated: 0, valid_video_count: 0, test_like_count: 0, parser_low_confidence_count: 0, unsupported_media_count: 0, invalid_quality_input_count: 0 });
+  assert.equal(result.verdict, "NOT_EVALUABLE"); assert.equal(result.stop_before_file_info, true);
+});
+
+test("each quality threshold fails independently while exact boundaries pass", () => {
+  const base = { items_evaluated: 100, valid_video_count: 85, test_like_count: 1, parser_low_confidence_count: 10, unsupported_media_count: 5, invalid_quality_input_count: 0 };
+  assert.equal(qualityGate(base).verdict, "PASS");
+  for (const [field, reason] of [["test_like_count", "TEST_LIKE_RATE_EXCEEDED"], ["parser_low_confidence_count", "PARSER_LOW_CONFIDENCE_RATE_EXCEEDED"], ["unsupported_media_count", "UNSUPPORTED_MEDIA_RATE_EXCEEDED"]]) {
+    const value = { ...base, [field]: base[field] + 1 };
+    assert.deepEqual(qualityGate(value).failures, [reason]);
+  }
+  assert.deepEqual(qualityGate({ ...base, valid_video_count: 84 }).failures, ["VALID_VIDEO_RATE_TOO_LOW"]);
 });
 
 test("query policy does not relax B19A strict decisions", () => {

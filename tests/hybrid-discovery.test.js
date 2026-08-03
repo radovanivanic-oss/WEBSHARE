@@ -947,3 +947,22 @@ test("hybrid discovery source exposes no crawler, import, reconciliation or publ
   assert.match(cliSource, /wildcardSuffix:\s*""/u);
   assert.match(moduleSource, /enumeration_complete:\s*false/gu);
 });
+
+test("hybrid discovery persists bounded aggregate quality evidence without names or raw items", async (t) => {
+  const current = fixture(t, "quality");
+  const config = configFor(current, { maxPages: 1, maxRequests: 3, pageSize: 3 });
+  const pages = new Map([[0, [
+    { ident: ["quality-a"], name: "Example Movie 2025 1080p.mkv", extension: "mkv" },
+    { ident: ["quality-b"], name: "Example Series S01E01 1080p.mkv", extension: "mkv" },
+    { ident: ["quality-c"], name: "Another Movie 2024 1080p.mp4", extension: "mp4" },
+  ]]]);
+  const result = await runHybridDiscovery(config, dependenciesFor(pages));
+  const manifest = result.manifest;
+  assert.equal(manifest.quality_evidence_complete, true);
+  assert.equal(manifest.quality_gate_verdict, "PASS");
+  assert.deepEqual(manifest.quality_counters, { items_evaluated: 3, valid_video_count: 3, test_like_count: 0, parser_low_confidence_count: 0, unsupported_media_count: 0, invalid_quality_input_count: 0 });
+  assert.deepEqual(manifest.page_metrics[0].quality_counters, manifest.quality_counters);
+  const persisted = fs.readdirSync(current.stagingDir).map(name => fs.readFileSync(path.join(current.stagingDir, name), "utf8")).join("\n");
+  assert.equal(persisted.includes("Example Movie"), false);
+  assert.equal(persisted.includes("quality-a"), true);
+});
