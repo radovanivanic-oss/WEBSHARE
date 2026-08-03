@@ -152,4 +152,4 @@ async function run(options) {
 }
 const INSERT_ONLY_SQL_DESCRIPTION = Object.freeze({ operation: "INSERT", table: "files", columns: INSERT_COLUMNS, parameters: INSERT_COLUMNS.map(column => `@${column}`), conflict_policy: "ABORT_AND_ROLLBACK_ENTIRE_TRANSACTION", prohibited: ["UPDATE", "UPSERT", "REPLACE", "DELETE"] });
 if (require.main === module) { run(parseArgs(process.argv.slice(2))).then(result => console.log(JSON.stringify({ run_id: result.run_id, import_ready: result.import_ready, review_required: result.review_required, blocked: result.blocked }))).catch(error => { console.error(error.message); process.exitCode = 1; }); }
-module.exports = { INSERT_COLUMNS, INSERT_ONLY_SQL_DESCRIPTION, OUTPUT_FILES, PAYLOAD_FIELDS, SAFETY, SOURCE_TYPES, evaluate, parseArgs, reviewDecision, run, sourceMap, streamFileHash };
+module.exports = { INSERT_COLUMNS, INSERT_ONLY_SQL_DESCRIPTION, OUTPUT_FILES, PAYLOAD_FIELDS, SAFETY, SOURCE_TYPES, canonical, catalogueLookup, evaluate, fileHash, parseArgs, reviewDecision, run, sha256, sourceMap, sourceValues, streamFileHash, writeAtomic };

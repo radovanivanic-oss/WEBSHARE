@@ -1,0 +1,20 @@
+"use strict";
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const Database = require("better-sqlite3");
+const test = require("node:test");
+const { run } = require("../scripts/run-import-review-b24");
+const { parseMediaName, PARSER_VERSION } = require("../lib/media-name-parser");
+
+function fixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "b24-")), source = path.join(root, "metadata"), runtime = path.join(root, "runtime"), catalog = path.join(root, "catalog.sqlite"); fs.mkdirSync(source); fs.mkdirSync(runtime); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const records = Array.from({ length: 25 }, (_, index) => { const ident = `id-${index}`, original_name = `Movie ${2020 + index} 1080p.mkv`; return { ident, original_name, normalized_name: parseMediaName(original_name, { extension: "mkv" }).normalizedName, extension: "mkv", size_bytes: index + 1, mime: "video/x-matroska", webshare_category: "video", available: true, removed: false, checked_at: "2026-08-03T00:00:00.000Z", first_seen_at: "2026-08-03T00:00:00.000Z", last_seen_at: "2026-08-03T00:00:00.000Z", parse_version: PARSER_VERSION, raw_json: JSON.stringify({ ident, name: original_name, extension: "mkv", size: index + 1, mime: "video/x-matroska", category: "video", available: true, removed: false }), metadata_status: "METADATA_READY", transport_error: null, retryable: false }; });
+  fs.writeFileSync(path.join(source, "metadata.json"), JSON.stringify({ schema_version: 2, records })); fs.writeFileSync(path.join(source, "metadata.manifest.json"), JSON.stringify({ schema_version: 2, run_id: "run", metadata_ready: 25, metadata_only: true, sqlite_write_performed: false, import_performed: false, reactivation_performed: false, deactivation_performed: false, reconciliation_performed: false, publication_performed: false })); fs.writeFileSync(path.join(source, "metadata.checkpoint.json"), JSON.stringify({ schema_version: 2, run_id: "run", counters: { metadata_ready: 25 } })); fs.writeFileSync(path.join(source, "runner.manifest.json"), JSON.stringify({ schema_version: 2, run_id: "run", metadata_only: true, authentication_completed: 2, file_info_completed: 25, total_requests_completed: 27, sqlite_write_performed: false, import_performed: false, reactivation_performed: false, deactivation_performed: false, reconciliation_performed: false, publication_performed: false })); fs.writeFileSync(path.join(source, "source-reference.json"), "{}\n"); fs.writeFileSync(path.join(source, "metadata.log"), "{}\n");
+  const db = new Database(catalog); db.exec("CREATE TABLE files(id INTEGER PRIMARY KEY, ident TEXT); CREATE TABLE candidates(id INTEGER PRIMARY KEY, candidate_key TEXT, media_id INTEGER);"); db.close(); return { source, runtime, catalog };
+}
+
+test("B24 reviews schema-v2 metadata with a read-only catalog and bounded payload", async t => { const f = fixture(t), manifest = await run({ sourceMetadataDir: f.source, catalogDb: f.catalog, outputDir: path.join(f.runtime, "import-review-b24-20260803T000000Z") }); const payload = JSON.parse(fs.readFileSync(path.join(f.runtime, "import-review-b24-20260803T000000Z", "import-candidate-payload.json"))); assert.equal(manifest.total_input, 25); assert.equal(manifest.catalog_read_only_query_count, 51); assert.equal(payload.records.length, manifest.import_ready); assert.equal(manifest.sqlite_write_performed, false); });
+
+test("B24 fails closed before output for a legacy or normalization-mismatched source", async t => { const f = fixture(t); const source = JSON.parse(fs.readFileSync(path.join(f.source, "metadata.json"), "utf8")); source.schema_version = 1; fs.writeFileSync(path.join(f.source, "metadata.json"), JSON.stringify(source)); await assert.rejects(run({ sourceMetadataDir: f.source, catalogDb: f.catalog, outputDir: path.join(f.runtime, "import-review-b24-20260803T000000Z") }), /schema-v2/); assert.equal(fs.readdirSync(f.runtime).length, 0); });
