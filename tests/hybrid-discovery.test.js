@@ -9,6 +9,7 @@ const test = require("node:test");
 const {
   HARD_LIMITS,
   createDiscoveryConfig,
+  extractQualityName,
   runHybridDiscovery,
 } = require("../lib/discovery/hybrid-discovery");
 const { MAX_LOG_BYTES } = require("../lib/discovery/staging-store");
@@ -965,4 +966,25 @@ test("hybrid discovery persists bounded aggregate quality evidence without names
   const persisted = fs.readdirSync(current.stagingDir).map(name => fs.readFileSync(path.join(current.stagingDir, name), "utf8")).join("\n");
   assert.equal(persisted.includes("Example Movie"), false);
   assert.equal(persisted.includes("quality-a"), true);
+});
+
+test("quality extractor accepts only the verified xml2js name wrapper or scalar fixtures", () => {
+  assert.equal(extractQualityName({ name: ["Live Movie 2025 1080p.mkv"] }), "Live Movie 2025 1080p.mkv");
+  assert.equal(extractQualityName({ name: "Fixture Movie 2025 1080p.mkv" }), "Fixture Movie 2025 1080p.mkv");
+  for (const item of [{}, { name: [] }, { name: ["a", "b"] }, { name: { value: "x" } }, { name: "" }, { name: "bad\u0000name" }, { name: "x".repeat(1025) }, { filename: "unsupported fallback.mkv" }]) assert.equal(extractQualityName(item), null);
+});
+
+test("live-shaped XML name items populate quality counters without persistence", async (t) => {
+  const current = fixture(t, "quality-live");
+  const config = configFor(current, { maxPages: 1, maxRequests: 3, pageSize: 3 });
+  const pages = new Map([[0, [
+    { ident: ["live-a"], name: ["Live Movie 2025 1080p.mkv"], type: ["mkv"] },
+    { ident: ["live-b"], name: ["Live Series S01E01 1080p.mkv"], type: ["mkv"] },
+    { ident: ["live-invalid"], name: [], type: ["mkv"] },
+  ]]]);
+  const { manifest } = await runHybridDiscovery(config, dependenciesFor(pages));
+  assert.deepEqual(manifest.quality_counters, { items_evaluated: 3, valid_video_count: 2, test_like_count: 0, parser_low_confidence_count: 0, unsupported_media_count: 0, invalid_quality_input_count: 1 });
+  assert.equal(manifest.quality_gate_verdict, "FAIL");
+  const persisted = fs.readdirSync(current.stagingDir).map(name => fs.readFileSync(path.join(current.stagingDir, name), "utf8")).join("\n");
+  assert.equal(persisted.includes("Live Movie"), false);
 });
