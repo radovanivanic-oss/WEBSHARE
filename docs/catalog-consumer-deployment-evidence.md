@@ -1,3 +1,3 @@
 # Deployment evidence
 
-The audit accepts explicit, read-only deployment snapshots. Source code alone is never proof of active production deployment; missing or conflicting runtime evidence remains `UNKNOWN` and blocks publication.
+Required CLI inputs are repository root, B.28 compatibility directory, output directory, and JSON snapshots for systemd, nginx, cron, and processes. Each uses `webshare-<type>-snapshot/v1`, has `schema_version:1`, UTC `captured_at`, `redaction_applied:true`, and bounded `records`. Bounds are 2 MiB, 256 systemd/nginx/process records, 128 cron records, and 4096-byte scalar values. All snapshots validate and hash before an output directory is created. Source code alone is never proof of active production deployment; missing or conflicting runtime evidence remains `UNKNOWN` and blocks publication.
