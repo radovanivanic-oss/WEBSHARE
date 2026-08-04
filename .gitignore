@@ -6,6 +6,7 @@ runtime/shadow-phase-b/
 # Explicit safety boundary for B.5 hybrid discovery staging.
 runtime/hybrid-discovery*/
 data/
+catalog-publications/
 *.log
 *.tmp
 videos_all.json
