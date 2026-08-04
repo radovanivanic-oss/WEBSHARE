@@ -1,0 +1,4 @@
+"use strict";
+const path=require("node:path"),v=require("../lib/publication/production-verification");
+function args(a){const o={mode:"FAST"};for(let i=0;i<a.length;i++){if(a[i]==="--help"){console.log("usage: node scripts/check-publication-health.js --publication-root DIR --mode FAST|FULL");process.exit(0);}if(a[i]==="--publication-root"&&!a[i+1])throw Error("missing root");if(a[i]==="--mode"&&!a[i+1])throw Error("missing mode");if(a[i]==="--publication-root")o.publicationRoot=path.resolve(a[++i]);else if(a[i]==="--mode")o.mode=a[++i].toUpperCase();else throw Error("invalid arguments");}if(!o.publicationRoot||!['FAST','FULL'].includes(o.mode))throw Error("invalid arguments");return o;}
+if(require.main===module)(async()=>{try{const r=await v.health(args(process.argv.slice(2)));console.log(JSON.stringify(r));if(r.health!=="PASS")process.exitCode=1;}catch(e){console.error(e.message);process.exitCode=1;}})();module.exports={args};

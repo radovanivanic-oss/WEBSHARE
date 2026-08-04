@@ -1,0 +1,4 @@
+"use strict";
+const assert=require("node:assert/strict"),fs=require("node:fs"),os=require("node:os"),path=require("node:path"),test=require("node:test"),v=require("../lib/publication/production-verification");
+test("health argument and inspection reject unsafe or unexpected files",async()=>{await assert.rejects(v.health({publicationRoot:path.join(os.tmpdir(),"missing-b31"),mode:"FAST"}));});
+test("health fixture reports temporary and unexpected files",t=>{const d=fs.mkdtempSync(path.join(os.tmpdir(),"health-"));t.after(()=>fs.rmSync(d,{recursive:true,force:true}));fs.mkdirSync(path.join(d,"generations","g"),{recursive:true});fs.writeFileSync(path.join(d,"current.json"),"{}\n");fs.writeFileSync(path.join(d,"generations","g","catalog.jsonl"),"x\n");fs.writeFileSync(path.join(d,"generations","g","publication.manifest.json"),"{}\n");fs.writeFileSync(path.join(d,".tmp-file"),"x");assert.ok(fs.existsSync(path.join(d,".tmp-file")));});
