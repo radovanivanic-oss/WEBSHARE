@@ -72,6 +72,7 @@ test("snapshots validate before output and derive active evidence", (t) => {
   const manifest = run(options);
   const rows = JSON.parse(fs.readFileSync(path.join(options.outputDir, "consumer-deployment.json"), "utf8"));
   a.equal(manifest.material_evidence_complete, true);
+  a.match(manifest.repository_commit, /^[0-9a-f]{40}$/u);
   a.equal(rows[0].deployment_status, "ACTIVE_PRODUCTION");
   a.equal(rows[0].repository_path, "server/catalog-api.js");
 });
