@@ -59,6 +59,7 @@ test("nginx include graph resolves globs, nested includes and sites-enabled syml
   a.equal(result.graph.full_graph_resolved, true);
   a.equal(result.graph.symlinks_resolved, symlinkExpected ? 1 : 0);
   a.equal(result.graph.include_files_resolved, 4);
+  a.equal(result.graph.approved_config_roots.some((rootPath) => /\/etc\/nginx$/u.test(rootPath)), false);
   a.equal(result.records.length, 2);
   a.deepEqual(result.records.map((record) => record.target_kind).sort(), ["PROXY", "TRY_FILES"]);
   a.equal(result.graph.active_static_catalog_path_found, true);
