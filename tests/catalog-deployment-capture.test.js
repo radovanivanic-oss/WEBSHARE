@@ -76,6 +76,21 @@ test("nginx graph accepts complete negative evidence", (t) => {
   a.equal(result.graph.full_graph_resolved, true);
 });
 
+test("nginx prefix-relative includes resolve from active config roots", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nginx-prefix-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const main = path.join(root, "nginx.conf");
+  fs.mkdirSync(path.join(root, "sites-enabled"), { recursive: true });
+  fs.mkdirSync(path.join(root, "snippets"), { recursive: true });
+  fs.writeFileSync(main, "events {}\nhttp { include sites-enabled/default; }\n");
+  fs.writeFileSync(path.join(root, "sites-enabled", "default"), "server { listen 80; include snippets/webshare-catalog-api.conf; }\n");
+  fs.writeFileSync(path.join(root, "snippets", "webshare-catalog-api.conf"), "location /api/ { proxy_pass http://127.0.0.1:8787; }\n");
+  const result = resolveNginxIncludeGraph({ mainConfigPath: main, approvedRoots: [root] });
+  a.equal(result.graph.full_graph_resolved, true);
+  a.equal(result.records.length, 1);
+  a.equal(result.records[0].target_kind, "PROXY");
+});
+
 test("nginx graph rejects cycles, symlink escape, oversized and invalid UTF-8 inputs", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nginx-invalid-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
