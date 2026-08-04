@@ -85,17 +85,20 @@ test("nginx graph rejects cycles, symlink escape, oversized and invalid UTF-8 in
   a.throws(() => resolveNginxIncludeGraph({ mainConfigPath: main, approvedRoots: [root] }), /NGINX_INCLUDE_CYCLE/);
   fs.writeFileSync(main, "include sites-enabled/*;\n");
   fs.mkdirSync(path.join(root, "sites-enabled"), { recursive: true });
+  const outsideTarget = path.join(os.tmpdir(), `outside-${process.pid}.conf`);
+  fs.writeFileSync(outsideTarget, "server {}\n");
   let symlinkCreated = true;
   try {
-    fs.symlinkSync(path.join(os.tmpdir(), "outside.conf"), path.join(root, "sites-enabled", "outside"));
+    fs.symlinkSync(outsideTarget, path.join(root, "sites-enabled", "outside"));
   } catch (error) {
     if (error.code !== "EPERM") throw error;
     symlinkCreated = false;
   }
   if (symlinkCreated) {
-    a.throws(() => resolveNginxIncludeGraph({ mainConfigPath: main, approvedRoots: [root] }), /NGINX_SYMLINK_ESCAPE|NGINX_INCLUDE_UNREADABLE/);
+    a.throws(() => resolveNginxIncludeGraph({ mainConfigPath: main, approvedRoots: [root] }), /NGINX_SYMLINK_ESCAPE/);
     fs.rmSync(path.join(root, "sites-enabled", "outside"));
   }
+  fs.rmSync(outsideTarget, { force: true });
   fs.writeFileSync(path.join(root, "bad.conf"), Buffer.from([0xc3, 0x28]));
   fs.writeFileSync(main, "include bad.conf;\n");
   a.throws(() => resolveNginxIncludeGraph({ mainConfigPath: main, approvedRoots: [root] }), /NGINX_INVALID_UTF8/);
