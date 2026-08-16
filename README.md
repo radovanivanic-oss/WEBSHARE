@@ -134,6 +134,8 @@ Addon `plugin.video.websharecrawler` je oddelená vrstva nad hotovým katalógom
 
 TMDb API kľúč patrí iba do serverového `.env`. Webshare meno, heslo a WST zostávajú iba v profile Kodi a nikdy sa neposielajú katalógovému serveru.
 
+For a bounded resolver check outside Kodi, use `python tools/probe-webshare-file-link.py --ident <known-ident>` with fresh `WEBSHARE_USERNAME` and `WEBSHARE_PASSWORD` process variables. The probe does not persist WST or the signed URL and prints only authentication status, ident, URL scheme, and hostname. It does not download media. Missing credentials fail with `LIVE_PROBE_BLOCKED_MISSING_CREDENTIALS`.
+
 ## Katalógový mediálny server
 
 Projekt obsahuje aj novú serverovú pipeline nad SQLite:

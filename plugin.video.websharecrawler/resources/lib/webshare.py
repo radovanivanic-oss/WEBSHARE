@@ -8,7 +8,7 @@ import os
 import time
 import uuid
 import xml.etree.ElementTree as ET
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from resources.lib.paths import profile_dir
@@ -49,8 +49,11 @@ def _post_xml(url, payload):
         },
     )
 
-    with urlopen(request, timeout=30) as response:
-        raw = response.read()
+    try:
+        with urlopen(request, timeout=30) as response:
+            raw = response.read()
+    except Exception:
+        raise ResolverError("Webshare network request failed.") from None
 
     try:
         root = ET.fromstring(raw)
@@ -61,7 +64,12 @@ def _post_xml(url, payload):
     if status and status != "OK":
         code = _text(root, "code")
         message = _text(root, "message", "Webshare API error")
-        raise ResolverError("{} {}".format(code, message).strip())
+        failure_text = "{} {}".format(code, message).lower()
+        if any(marker in failure_text for marker in ("token", "wst", "access denied", "unauthor", "auth", "login")):
+            raise ResolverError("Webshare authentication failed.")
+        if any(marker in failure_text for marker in ("not found", "not_found", "unavailable", "removed", "does not exist")):
+            raise ResolverError("Webshare file unavailable.")
+        raise ResolverError("Webshare API request failed.")
 
     return root
 
@@ -139,6 +147,15 @@ def _webshare_password_hash(password, salt):
     return hashlib.sha1(_md5_crypt(password, salt).encode("utf-8")).hexdigest()
 
 
+def _validate_stream_url(url):
+    if not isinstance(url, str):
+        raise ResolverError("Webshare returned an unsafe stream link.")
+    parsed = urlparse(url or "")
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise ResolverError("Webshare returned an unsafe stream link.")
+    return url
+
+
 class WebshareResolver(object):
     def __init__(self, username, password, cache_ttl_seconds=21600):
         self.username = username
@@ -208,7 +225,7 @@ class WebshareResolver(object):
 
     def _looks_like_auth_error(self, error):
         message = str(error).lower()
-        return "token" in message or "access denied" in message or "wst" in message
+        return "token" in message or "access denied" in message or "wst" in message or "authentication" in message
 
     def _get_cached_url(self, ident):
         cache = self._load_json(self.cache_path, {})
@@ -219,13 +236,17 @@ class WebshareResolver(object):
         expires_at = int(entry.get("expires_at") or 0)
         url = entry.get("url")
         if url and expires_at > int(time.time()):
-            return url
+            try:
+                return _validate_stream_url(url)
+            except ResolverError:
+                pass
 
         cache.pop(ident, None)
         self._save_json(self.cache_path, cache)
         return None
 
     def _set_cached_url(self, ident, url):
+        _validate_stream_url(url)
         cache = self._load_json(self.cache_path, {})
         cache[ident] = {
             "url": url,
@@ -302,7 +323,7 @@ class WebshareResolver(object):
         link = _text(response, "link")
         if not link:
             raise ResolverError("Webshare nevrátil stream link")
-        return link
+        return _validate_stream_url(link)
 
 
 def _mask_token(token):
