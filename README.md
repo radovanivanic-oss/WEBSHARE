@@ -22,6 +22,15 @@ node main.js --status
 Crawler sa nespustí bez explicitného režimu. Návrh a recovery postup sú v
 `docs/crawler-correctness-recovery-v2.md`.
 
+### Legacy utility credentials
+
+The legacy `endpoint.js` proxy utility requires `PROXY_API_KEY`, and
+`today.js` requires `WEBSHARE_WST`. Set these only in the local process
+environment when deliberately running the corresponding utility. Both scripts
+fail closed when the variable is missing, redact sensitive response fields,
+and never accept a source-code fallback. Revoke and regenerate any credential
+that was previously committed before using either utility again.
+
 ## GitHub workflow
 
 Projekt je určený na workflow:

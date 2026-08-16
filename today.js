@@ -2,12 +2,18 @@ const axios = require("axios");
 const { parseStringPromise } = require("xml2js");
 const fs = require("fs").promises;
 
-const wstToken = "kRApIF9kPZKac2np"; // aktuálny WST token
+function getWebshareWst(env = process.env) {
+  const value = env.WEBSHARE_WST;
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error("WEBSHARE_WST is required.");
+  }
+  return value;
+}
 
 const chars = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
 
 // Funkcia na stiahnutie videí pre konkrétny filter
-async function fetchVideosForFilter(filter) {
+async function fetchVideosForFilter(filter, { wstToken = getWebshareWst(), client = axios, parse = parseStringPromise } = {}) {
   const allFiles = [];
   let offset = 0;
   const limit = 50;
@@ -23,13 +29,13 @@ async function fetchVideosForFilter(filter) {
         wst: wstToken
       });
 
-      const resp = await axios.post(
+      const resp = await client.post(
         "https://webshare.cz/api/search/",
         params.toString(),
         { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
       );
 
-      const json = await parseStringPromise(resp.data);
+      const json = await parse(resp.data);
       const files = json.response.file || [];
 
       if (files.length === 0) break;
@@ -46,7 +52,7 @@ async function fetchVideosForFilter(filter) {
       offset += files.length;
 
     } catch (err) {
-      console.error(`Chyba pri filtre "${filter}":`, err.message);
+      console.error("Webshare search request failed.");
       break;
     }
   }
@@ -55,21 +61,21 @@ async function fetchVideosForFilter(filter) {
 }
 
 // ------------------------ Hlavné spustenie ------------------------
-(async () => {
+async function main({ wstToken = getWebshareWst(), client = axios, parse = parseStringPromise, fileSystem = fs } = {}) {
   const allVideos = [];
 
   for (const first of chars) {
     console.log(`Sťahujem videá začínajúce na "${first}"...`);
 
     // najprv stiahnuť filtra bez druhého znaku (iba "a*", "b*", ...)
-    const videosSingle = await fetchVideosForFilter(first);
+    const videosSingle = await fetchVideosForFilter(first, { wstToken, client, parse });
     allVideos.push(...videosSingle);
     console.log(`- Nájdol som ${videosSingle.length} videí pre "${first}*"`);
 
     // potom dvojúrovňové filtrovanie (napr. "aa*", "ab*", "ac*", ...)
     for (const second of chars) {
       const filter = first + second;
-      const videosDouble = await fetchVideosForFilter(filter);
+      const videosDouble = await fetchVideosForFilter(filter, { wstToken, client, parse });
       if (videosDouble.length > 0) {
         allVideos.push(...videosDouble);
         console.log(`- Našiel som ${videosDouble.length} videí pre "${filter}*"`);
@@ -82,9 +88,20 @@ async function fetchVideosForFilter(filter) {
 
   // uloženie do súboru
   try {
-    await fs.writeFile("videos_all.json", JSON.stringify(uniqueVideos, null, 2), "utf-8");
+    await fileSystem.writeFile("videos_all.json", JSON.stringify(uniqueVideos, null, 2), "utf-8");
     console.log(`✅ Úspešne uložené ${uniqueVideos.length} videí do videos_all.json`);
+    return uniqueVideos;
   } catch (err) {
-    console.error("Chyba pri ukladaní súboru:", err.message);
+    console.error("Webshare catalog output failed.");
+    return [];
   }
-})();
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { getWebshareWst, fetchVideosForFilter, main };
