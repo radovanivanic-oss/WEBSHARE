@@ -351,6 +351,10 @@ class KodiSearchTests(unittest.TestCase):
         self.assertGreaterEqual(len(search_items), 8)
         self.assertTrue(all(call[1].get("isFolder") is True for call, _params in search_items))
 
+    def test_catalog_api_is_the_default_movie_catalog_path(self):
+        with mock.patch.object(addon.ADDON, "getSetting", return_value=""):
+            self.assertTrue(addon.use_catalog_api())
+
     def test_real_router_keyboard_api_rendering_and_detail_route(self):
         client = mock.Mock()
         client.search.return_value = {
@@ -502,6 +506,28 @@ class KodiSearchTests(unittest.TestCase):
         self.assertEqual(params, {"action": "play", "ident": "fixture-ident", "title": "Inception"})
         self.assertFalse(kwargs.get("isFolder"))
         self.assertEqual(args[2].properties["IsPlayable"], "true")
+
+    def test_movie_metadata_has_safe_description_and_art_fallback(self):
+        row = {
+            "media_type": "movie", "title": "Fixture Movie", "name": "Fixture Movie.mkv",
+            "year": 2024, "genre": "unknown", "quality": "1080p", "language": "unknown",
+            "audio_type": "unknown", "subtitle_type": "unknown", "size": 100,
+        }
+        info = addon.build_video_info(row, {}, "Fixture Movie")
+        self.assertEqual(info["plot"], "Popis nie je k dispozícii.")
+        captured = []
+        with mock.patch.object(addon.xbmcplugin, "addDirectoryItem", side_effect=lambda *args, **kwargs: captured.append((args, kwargs))):
+            addon.add_api_media({"id": 1, "title": "Fixture Movie", "media_type": "movie", "year": 2024, "versions": 1, "genres": []})
+        self.assertTrue(captured[0][0][2].art["poster"].endswith("icon.png"))
+
+    def test_api_movie_detail_rejects_malformed_files_response(self):
+        client = mock.Mock()
+        client.detail.return_value = {"id": 1, "title": "Fixture Movie", "media_type": "movie"}
+        client.files.return_value = {"data": ["not-a-file"]}
+        with mock.patch.object(addon, "catalog_api", return_value=client):
+            with mock.patch.object(addon.xbmcplugin, "endOfDirectory") as end_directory:
+                addon.api_media_detail({"media_id": "1"})
+        self.assertEqual(end_directory.call_args.kwargs, {"succeeded": False})
 
     def test_local_index_search_is_partial_case_and_punctuation_tolerant(self):
         with mock.patch.object(catalog_store, "DB_PATH", str(PROFILE_ROOT / "local-search" / "catalog.db")):

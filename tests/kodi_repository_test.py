@@ -10,16 +10,16 @@ ROOT = Path(__file__).resolve().parents[1]
 ADDON_ID = "plugin.video.websharecrawler"
 ADDON_ROOT = ROOT / ADDON_ID
 KODI_REPO = ROOT / "kodi-repo"
-ZIP_PATH = KODI_REPO / ADDON_ID / (ADDON_ID + "-0.8.11.zip")
-EXPECTED_ZIP_SHA256 = "08a0a167e0dd8577c7280bf8a5a07567106b2b90f5db32600a6d3b4e1eee3fb5"
+ZIP_PATH = KODI_REPO / ADDON_ID / (ADDON_ID + "-0.8.12.zip")
+EXPECTED_ZIP_SHA256 = "45b772cc2c44f87e5b3277c070004b1aa5b18a2755b8571646d111763b9f723d"
 
 
 class KodiRepositoryTests(unittest.TestCase):
-    def test_repository_metadata_advertises_webshare_atlas_0_8_11(self):
+    def test_repository_metadata_advertises_webshare_atlas_0_8_12(self):
         addons = ElementTree.parse(KODI_REPO / "addons.xml").getroot()
         addon = next(item for item in addons.findall("addon") if item.get("id") == ADDON_ID)
         self.assertEqual(addon.get("name"), "Webshare Atlas")
-        self.assertEqual(addon.get("version"), "0.8.11")
+        self.assertEqual(addon.get("version"), "0.8.12")
         self.assertEqual(addon.get("provider-name"), "Radeco")
 
         addons_bytes = (KODI_REPO / "addons.xml").read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
@@ -46,7 +46,7 @@ class KodiRepositoryTests(unittest.TestCase):
         addon = ElementTree.fromstring(packaged_files[f"{ADDON_ID}/addon.xml"])
         self.assertEqual(addon.get("id"), ADDON_ID)
         self.assertEqual(addon.get("name"), "Webshare Atlas")
-        self.assertEqual(addon.get("version"), "0.8.11")
+        self.assertEqual(addon.get("version"), "0.8.12")
 
     def test_final_zip_contains_search_fix_and_no_junk_or_secret_values(self):
         with zipfile.ZipFile(ZIP_PATH) as archive:

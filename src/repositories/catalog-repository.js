@@ -90,15 +90,22 @@ function externalUrlFor(row) {
 function serializeMedia(row) {
   if (!row) return null;
   const externalUrl = externalUrlFor(row);
+  const releaseDate = String(row.release_date || "").trim();
   return {
     id: row.id,
     media_key: row.media_key,
     media_type: row.media_type,
     category: row.category,
+    is_active: Boolean(row.is_active),
     title: row.title,
     original_title: row.original_title,
     year: row.year,
     release_date: row.release_date,
+    release_date_precision: /^\d{4}-\d{2}-\d{2}$/u.test(releaseDate)
+      ? "day"
+      : row.year
+        ? "year"
+        : null,
     external_source: row.external_source,
     external_id: row.external_id,
     external_url: externalUrl,
@@ -210,11 +217,9 @@ function createCatalogRepository(database, config) {
       values.push(params.quality);
     }
     if (params.sort === "release_date_desc") {
-      where.push("m.release_date IS NOT NULL");
-      where.push("date(m.release_date) <= date('now')");
-      where.push("m.external_source = 'tmdb'");
-      where.push("m.external_id IS NOT NULL");
-      where.push("m.metadata_status = 'matched'");
+      where.push("m.media_type = 'movie'");
+      where.push("((m.release_date IS NOT NULL AND date(m.release_date) <= date('now')) OR (m.release_date IS NULL AND m.year IS NOT NULL AND printf('%04d-01-01', m.year) <= date('now')))");
+      where.push("(m.release_date IS NOT NULL OR m.year IS NOT NULL)");
     }
     if (params.query) {
       where.push("EXISTS (SELECT 1 FROM files visible_file WHERE visible_file.media_id = m.id AND visible_file.is_active = 1 AND visible_file.is_playable_video = 1)");

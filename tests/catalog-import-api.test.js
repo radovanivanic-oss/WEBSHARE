@@ -154,6 +154,7 @@ test("movie news use release dates and metadata failures do not block files", as
       external_url = 'https://www.themoviedb.org/movie/999001', metadata_status = 'matched'
     WHERE id = ?
   `).run(newestId);
+  const yearOnlyId = Number(insertMedia.run("local:year-only", "Year Only Movie", 2023, null, now, now).lastInsertRowid);
   insertMedia.run("local:unknown-year", "Unknown Year", null, null, now, now);
   insertMedia.run("local:future", "Future Movie", 2099, null, now, now);
 
@@ -179,14 +180,18 @@ test("movie news use release dates and metadata failures do not block files", as
   try {
     const listing = await app.inject({ method: "GET", url: "/api/media?category=movies&sort=release_date_desc&page=1&limit=50" });
     assert.equal(listing.statusCode, 200);
-    assert.deepEqual(listing.json().data.map((item) => item.title), ["Newest Movie", dune.title]);
+    assert.deepEqual(listing.json().data.map((item) => item.title), ["Newest Movie", dune.title, "Year Only Movie"]);
     assert.equal(listing.json().data.some((item) => item.title === "Unknown Year"), false);
     assert.equal(listing.json().data.some((item) => item.title === "Future Movie"), false);
     const duneListing = listing.json().data.find((item) => item.id === dune.id);
     assert.equal(duneListing.external_id, "693134");
     assert.equal(duneListing.external_url, "https://www.themoviedb.org/movie/693134");
+    assert.equal(duneListing.release_date_precision, "day");
     assert.equal(duneListing.available_files_count, 2);
     assert.equal(duneListing.best_quality, "2160p");
+    const yearOnlyListing = listing.json().data.find((item) => item.id === yearOnlyId);
+    assert.equal(yearOnlyListing.release_date, null);
+    assert.equal(yearOnlyListing.release_date_precision, "year");
 
     const metadata = await app.inject({ method: "GET", url: `/api/media/${dune.id}/metadata` });
     assert.equal(metadata.statusCode, 200);

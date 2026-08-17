@@ -53,10 +53,6 @@ $repositoryDir = Join-Path $root $RepositoryId
 $pluginVersion = Get-AddonVersion (Join-Path $pluginDir "addon.xml")
 $repositoryVersion = Get-AddonVersion (Join-Path $repositoryDir "addon.xml")
 
-if (Test-Path $repoOut) {
-  Remove-Item -LiteralPath $repoOut -Recurse -Force
-}
-
 New-Item -ItemType Directory -Force -Path (Join-Path $repoOut $PluginId) | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $repoOut $RepositoryId) | Out-Null
 

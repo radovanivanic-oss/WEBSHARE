@@ -56,14 +56,15 @@ function createCatalogApi(options = {}) {
     const id = Number.parseInt(request.params.id, 10);
     if (!Number.isFinite(id) || id < 1) return reply.code(400).send({ error: "invalid_media_id" });
     const media = repository.getMedia(id);
-    if (!media) return reply.code(404).send({ error: "media_not_found" });
+    if (!media || !media.is_active) return reply.code(404).send({ error: "media_not_found" });
     return { data: media };
   });
 
   app.get(`${base}/media/:id/files`, async (request, reply) => {
     const id = Number.parseInt(request.params.id, 10);
     if (!Number.isFinite(id) || id < 1) return reply.code(400).send({ error: "invalid_media_id" });
-    if (!repository.getMedia(id)) return reply.code(404).send({ error: "media_not_found" });
+    const media = repository.getMedia(id);
+    if (!media || !media.is_active) return reply.code(404).send({ error: "media_not_found" });
     return repository.getMediaFiles(id, request.query);
   });
 
