@@ -7,8 +7,8 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from urllib.parse import parse_qs, parse_qsl, urlsplit
-from urllib.error import URLError
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit
+from urllib.error import HTTPError, URLError
 from unittest import mock
 
 
@@ -82,11 +82,13 @@ def install_kodi_stubs():
 
     xbmcplugin = types.ModuleType("xbmcplugin")
     xbmcplugin.resolved = []
+    xbmcplugin.added = []
+    xbmcplugin.ended = []
     xbmcplugin.setResolvedUrl = lambda handle, succeeded, item: xbmcplugin.resolved.append(
         (handle, succeeded, item)
     )
-    xbmcplugin.endOfDirectory = lambda *args, **kwargs: None
-    xbmcplugin.addDirectoryItem = lambda *args, **kwargs: None
+    xbmcplugin.endOfDirectory = lambda *args, **kwargs: xbmcplugin.ended.append((args, kwargs))
+    xbmcplugin.addDirectoryItem = lambda *args, **kwargs: xbmcplugin.added.append((args, kwargs))
     xbmcplugin.setContent = lambda *args, **kwargs: None
     sys.modules["xbmcplugin"] = xbmcplugin
 
@@ -313,6 +315,119 @@ class KodiSearchTests(unittest.TestCase):
     def dialog_input(self, value):
         return mock.patch.object(addon.xbmcgui.Dialog, "input", return_value=value, create=True)
 
+    def capture_directory(self):
+        added = []
+        ended = []
+        add_patch = mock.patch.object(
+            addon.xbmcplugin,
+            "addDirectoryItem",
+            side_effect=lambda *args, **kwargs: added.append((args, kwargs)),
+        )
+        end_patch = mock.patch.object(
+            addon.xbmcplugin,
+            "endOfDirectory",
+            side_effect=lambda *args, **kwargs: ended.append((args, kwargs)),
+        )
+        return added, ended, add_patch, end_patch
+
+    @staticmethod
+    def route_params(item_call):
+        args, _kwargs = item_call
+        return dict(parse_qsl(urlsplit(args[1]).query))
+
+    def test_search_entries_are_directories(self):
+        added, _ended, add_patch, end_patch = self.capture_directory()
+        with add_patch, end_patch:
+            addon.search_menu()
+            addon.api_root_menu()
+            addon.api_movies_menu()
+            addon.api_series_menu()
+
+        search_items = [
+            (call, self.route_params(call))
+            for call in added
+            if self.route_params(call).get("action") in ("search", "api_search")
+        ]
+        self.assertGreaterEqual(len(search_items), 8)
+        self.assertTrue(all(call[1].get("isFolder") is True for call, _params in search_items))
+
+    def test_real_router_keyboard_api_rendering_and_detail_route(self):
+        client = mock.Mock()
+        client.search.return_value = {
+            "data": [
+                {
+                    "id": 272158,
+                    "title": "Počiatok",
+                    "original_title": "Inception",
+                    "media_type": "movie",
+                    "year": 2010,
+                    "versions": 1,
+                    "genres": [],
+                }
+            ],
+            "pagination": {"pages": 1, "has_more": False},
+        }
+        added, ended, add_patch, end_patch = self.capture_directory()
+        original_argv = sys.argv[:]
+        try:
+            with add_patch, end_patch, self.dialog_input("Inception 2010"):
+                with mock.patch.object(addon, "catalog_api", return_value=client):
+                    sys.argv = [addon.BASE_URL, str(addon.HANDLE), "?" + urlencode({"action": "api_search", "category": "movies"})]
+                    addon.router()
+        finally:
+            sys.argv = original_argv
+
+        self.assertEqual(client.search.call_args.args, ("Inception 2010",))
+        self.assertEqual(len(added), 1)
+        self.assertEqual(self.route_params(added[0]), {"action": "api_media_detail", "media_id": "272158"})
+        self.assertTrue(added[0][1].get("isFolder"))
+        self.assertEqual(ended[-1][1], {"succeeded": True})
+
+    def test_api_search_queries_and_unicode_are_forwarded(self):
+        client = mock.Mock()
+        client.search.return_value = {"data": [], "pagination": {"pages": 1, "has_more": False}}
+        with mock.patch.object(addon, "catalog_api", return_value=client):
+            for query in ("Inception", "Inception 2010", "Počiatok"):
+                with self.subTest(query=query), self.dialog_input(query):
+                    addon.api_search({"category": "movies"})
+        self.assertEqual([call.args[0] for call in client.search.call_args_list], ["Inception", "Inception 2010", "Počiatok"])
+
+    def test_api_search_cancel_and_empty_query_do_not_call_api(self):
+        client = mock.Mock()
+        with mock.patch.object(addon, "catalog_api", return_value=client):
+            with self.dialog_input(""):
+                addon.api_search({})
+        client.search.assert_not_called()
+        self.store.add_search.assert_not_called()
+
+    def test_api_response_shape_renders_multiple_items_and_missing_pagination(self):
+        client = mock.Mock()
+        client.search.return_value = {
+            "data": [
+                {"id": 1, "title": "Inception", "media_type": "movie", "year": 2010, "versions": 1, "genres": []},
+                {"id": 2, "title": "Počiatok", "media_type": "movie", "year": 2010, "versions": 1, "genres": []},
+            ]
+        }
+        added, ended, add_patch, end_patch = self.capture_directory()
+        with add_patch, end_patch, mock.patch.object(addon, "catalog_api", return_value=client):
+            with self.dialog_input("Inception"):
+                addon.api_search({})
+        self.assertEqual(len(added), 2)
+        self.assertEqual([self.route_params(call)["media_id"] for call in added], ["1", "2"])
+        self.assertEqual(ended[-1][1], {"succeeded": True})
+
+    def test_malformed_api_results_fail_as_directory_error(self):
+        for response in (None, [], {"data": ["not-a-media-object"]}, {"data": "not-a-list"}):
+            with self.subTest(response=response):
+                client = mock.Mock()
+                client.search.return_value = response
+                added, ended, add_patch, end_patch = self.capture_directory()
+                with add_patch, end_patch, mock.patch.object(addon, "catalog_api", return_value=client):
+                    with self.dialog_input("Inception"):
+                        addon.api_search({})
+                self.assertEqual(added, [])
+                self.assertEqual(ended[-1][1], {"succeeded": False})
+
     def test_search_menu_keyboard_query_propagates_to_movie_route(self):
         with self.dialog_input("Inception 2010"):
             with mock.patch.object(addon, "movie_groups") as movie_groups:
@@ -361,6 +476,17 @@ class KodiSearchTests(unittest.TestCase):
                 catalog_api.CatalogApiClient("https://catalog.example/api").search("Inception 2010 & Žena")
         query = parse_qs(urlsplit(transport.requests[0].full_url).query)
         self.assertEqual(query["q"], ["Inception 2010 & Žena"])
+
+        for status in (400, 500):
+            transport = QueueTransport(HTTPError("https://catalog.example/api/search", status, "fixture", None, None))
+            with mock.patch.object(catalog_api, "urlopen", transport):
+                with self.assertRaises(catalog_api.CatalogApiError):
+                    catalog_api.CatalogApiClient("https://catalog.example/api").search("Inception")
+
+        transport = QueueTransport(URLError("fixture-network"))
+        with mock.patch.object(catalog_api, "urlopen", transport):
+            with self.assertRaises(catalog_api.CatalogApiError):
+                catalog_api.CatalogApiClient("https://catalog.example/api").search("Inception")
 
     def test_api_file_ident_uses_existing_playback_route(self):
         captured = []

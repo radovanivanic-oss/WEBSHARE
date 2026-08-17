@@ -332,9 +332,9 @@ def root_menu():
 
 
 def api_root_menu():
-    add_command("[B]Rýchle hľadanie filmov[/B]", "api_search", {"category": "movies"})
-    add_command("[B]Rýchle hľadanie seriálov[/B]", "api_search", {"category": "series"})
-    add_command("Vyhľadávanie", "api_search")
+    add_directory("[B]Rýchle hľadanie filmov[/B]", "api_search", {"category": "movies"})
+    add_directory("[B]Rýchle hľadanie seriálov[/B]", "api_search", {"category": "series"})
+    add_directory("Vyhľadávanie", "api_search")
     add_directory("Filmy", "api_movies")
     add_directory("Seriály", "api_series")
     for label, category in (
@@ -363,7 +363,7 @@ def api_movies_menu():
     add_directory("Žánre", "api_genres", {"category": "movies"})
     add_directory("Kvalita", "api_quality", {"category": "movies"})
     add_directory("Dabing / titulky", "api_languages", {"category": "movies"})
-    add_command("Hľadať film", "api_search", {"category": "movies"})
+    add_directory("Hľadať film", "api_search", {"category": "movies"})
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -375,7 +375,7 @@ def api_series_menu():
     add_directory("Žánre", "api_genres", {"category": "series"})
     add_directory("Kvalita", "api_quality", {"category": "series"})
     add_directory("Dabing / titulky", "api_languages", {"category": "series"})
-    add_command("Hľadať seriál", "api_search", {"category": "series"})
+    add_directory("Hľadať seriál", "api_search", {"category": "series"})
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -451,9 +451,9 @@ def add_pins_to_home():
 
 
 def search_menu():
-    add_command("Rýchle hľadanie", "search")
-    add_command("Hľadať film", "search", {"media_type": "movie"})
-    add_command("Hľadať seriál", "search", {"media_type": "episode"})
+    add_directory("Rýchle hľadanie", "search")
+    add_directory("Hľadať film", "search", {"media_type": "movie"})
+    add_directory("Hľadať seriál", "search", {"media_type": "episode"})
     add_directory("Posledné hľadania", "recent_searches")
     add_command("Hľadať podľa identu", "search_ident")
     add_directory("Filter", "advanced_filter")
@@ -925,9 +925,28 @@ def api_media(params):
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
 
-    for media in hydrate_api_listing_metadata(response.get("data", [])):
+    if not isinstance(response, dict):
+        notify("Katalógové API vrátilo neplatnú odpoveď", xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+        return
+
+    data = response.get("data", [])
+    if data is None:
+        data = []
+    if not isinstance(data, list):
+        notify("Katalógové API vrátilo neplatné výsledky", xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+        return
+    if any(not isinstance(media, dict) for media in data):
+        notify("Katalógové API vrátilo neplatné položky", xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+        return
+
+    for media in hydrate_api_listing_metadata(data):
         add_api_media(media)
     pagination = response.get("pagination") or {}
+    if not isinstance(pagination, dict):
+        pagination = {}
     has_more = bool(pagination.get("has_more")) if "has_more" in pagination else page + 1 < int(pagination.get("pages") or 0)
     add_next_page(has_more, "api_media", params, page)
     xbmcplugin.setContent(HANDLE, "tvshows" if params.get("category") == "series" else "movies")
