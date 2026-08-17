@@ -7,7 +7,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, parse_qsl, urlsplit
 from urllib.error import URLError
 from unittest import mock
 
@@ -59,6 +59,15 @@ def install_kodi_stubs():
         def setProperty(self, key, value):
             self.properties[key] = value
 
+        def addContextMenuItems(self, items):
+            self.context = items
+
+        def setInfo(self, kind, info):
+            self.info = (kind, info)
+
+        def setArt(self, art):
+            self.art = art
+
     class Dialog:
         def notification(self, *args, **kwargs):
             return None
@@ -85,6 +94,9 @@ def install_kodi_stubs():
 install_kodi_stubs()
 
 import resources.lib.webshare as webshare
+import resources.lib.catalog_api as catalog_api
+import resources.lib.metadata as metadata
+import resources.lib.store as catalog_store
 
 
 def load_addon_module():
@@ -286,6 +298,105 @@ class KodiPlaybackTests(unittest.TestCase):
         self.assertEqual(len(addon.xbmcplugin.resolved), 1)
         self.assertFalse(addon.xbmcplugin.resolved[0][1])
         self.store.record_play_start.assert_not_called()
+
+
+class KodiSearchTests(unittest.TestCase):
+    def setUp(self):
+        self.store = mock.Mock()
+        self.store_patch = mock.patch.object(addon, "store", return_value=self.store)
+        self.notify_patch = mock.patch.object(addon, "notify")
+        self.store_patch.start()
+        self.notify_patch.start()
+        self.addCleanup(self.store_patch.stop)
+        self.addCleanup(self.notify_patch.stop)
+
+    def dialog_input(self, value):
+        return mock.patch.object(addon.xbmcgui.Dialog, "input", return_value=value, create=True)
+
+    def test_search_menu_keyboard_query_propagates_to_movie_route(self):
+        with self.dialog_input("Inception 2010"):
+            with mock.patch.object(addon, "movie_groups") as movie_groups:
+                addon.search({"media_type": "movie"})
+        self.store.add_search.assert_called_once_with("Inception 2010")
+        movie_groups.assert_called_once_with({"q": "Inception 2010", "media_type": "movie"})
+
+    def test_cancel_and_empty_search_end_safely(self):
+        with mock.patch.object(addon.xbmcplugin, "endOfDirectory") as end_directory:
+            with self.dialog_input(""):
+                addon.search({})
+        end_directory.assert_called_once_with(addon.HANDLE)
+        self.store.add_search.assert_not_called()
+
+    def test_plugin_route_encodes_unicode_and_punctuation(self):
+        route = addon.addon_url({"action": "search", "q": "Inception 2010 & Žena"})
+        params = dict(parse_qsl(urlsplit(route).query))
+        self.assertEqual(params, {"action": "search", "q": "Inception 2010 & Žena"})
+
+    def test_api_search_propagates_query_and_constructs_results(self):
+        client = mock.Mock()
+        client.search.return_value = {
+            "data": [{"id": 7, "title": "Inception", "media_type": "movie", "year": 2010, "versions": 1}],
+            "pagination": {"pages": 1, "has_more": False},
+        }
+        with mock.patch.object(addon, "catalog_api", return_value=client):
+            with self.dialog_input("Inception 2010"):
+                with mock.patch.object(addon, "add_api_media") as add_media:
+                    addon.api_search({"category": "movies"})
+        client.search.assert_called_once()
+        self.assertEqual(client.search.call_args.args, ("Inception 2010",))
+        self.assertEqual(add_media.call_args.args[0]["id"], 7)
+
+    def test_api_error_and_malformed_response_are_safe(self):
+        client = mock.Mock()
+        client.search.side_effect = catalog_api.CatalogApiError("fixture API error")
+        with mock.patch.object(addon, "catalog_api", return_value=client):
+            with self.dialog_input("Inception"):
+                with mock.patch.object(addon.xbmcplugin, "endOfDirectory") as end_directory:
+                    addon.api_search({})
+        self.assertEqual(end_directory.call_args.kwargs, {"succeeded": False})
+
+        transport = QueueTransport("not-json")
+        with mock.patch.object(catalog_api, "urlopen", transport):
+            with self.assertRaises(catalog_api.CatalogApiError):
+                catalog_api.CatalogApiClient("https://catalog.example/api").search("Inception 2010 & Žena")
+        query = parse_qs(urlsplit(transport.requests[0].full_url).query)
+        self.assertEqual(query["q"], ["Inception 2010 & Žena"])
+
+    def test_api_file_ident_uses_existing_playback_route(self):
+        captured = []
+        with mock.patch.object(addon.xbmcplugin, "addDirectoryItem", side_effect=lambda *args, **kwargs: captured.append((args, kwargs))):
+            addon.add_api_file(
+                {"ident": "fixture-ident", "name": "Inception 2010.mkv", "size": 1000, "extension": "mkv", "resolution": "1080p"},
+                {"title": "Inception", "media_type": "movie", "year": 2010},
+                {"genres": []},
+            )
+        self.assertEqual(len(captured), 1)
+        args, kwargs = captured[0]
+        params = dict(parse_qsl(urlsplit(args[1]).query))
+        self.assertEqual(params, {"action": "play", "ident": "fixture-ident", "title": "Inception"})
+        self.assertFalse(kwargs.get("isFolder"))
+        self.assertEqual(args[2].properties["IsPlayable"], "true")
+
+    def test_local_index_search_is_partial_case_and_punctuation_tolerant(self):
+        with mock.patch.object(catalog_store, "DB_PATH", str(PROFILE_ROOT / "local-search" / "catalog.db")):
+            local_store = catalog_store.AtlasStore()
+            local_store.replace_items(
+                [
+                    metadata.parse_item(
+                        {"ident": "fixture-inception", "name": "Inception 2010 1080p AV1 10Bit DKong.mkv", "type": "mkv", "category": "video"},
+                        0,
+                    ),
+                    metadata.parse_item(
+                        {"ident": "fixture-zena", "name": "Žena 2025 1080p.mkv", "type": "mkv", "category": "video"},
+                        1,
+                    ),
+                ],
+                {"catalog": {"catalog_key": "movie", "index_version": 5}},
+            )
+            for query in ("Inception", "inception 2010", "Inception: 2010", "DKong", "Zena", "2025"):
+                rows, has_more = local_store.query_items({"q": query}, limit=10)
+                self.assertFalse(has_more, query)
+                self.assertIn("fixture-inception" if query != "Zena" and query != "2025" else "fixture-zena", [row["ident"] for row in rows], query)
 
 
 if __name__ == "__main__":

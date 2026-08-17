@@ -9,7 +9,7 @@ from resources.lib.metadata import is_video, parse_item
 from resources.lib.store import AtlasStore
 
 
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 
 
 class CatalogIndexer(object):

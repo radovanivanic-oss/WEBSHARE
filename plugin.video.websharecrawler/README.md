@@ -95,11 +95,8 @@ ident
 -> Kodi playback
 ```
 
-Nepoužíva sa:
-
-```text
-https://webshare.cz/dl/{id}/{wst}
-```
+Priame download URL sa nepoužívajú; stream sa odovzdáva iba po
+úspešnom `file_link` resolveri.
 
 ## Default nastavenia
 

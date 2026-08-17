@@ -4,6 +4,7 @@ from __future__ import absolute_import, division, unicode_literals
 
 import os
 import re
+import unicodedata
 
 
 VIDEO_EXTENSIONS = set(
@@ -46,6 +47,12 @@ def normalize_title(value):
     base = re.sub(r"[\._]+", " ", base)
     base = re.sub(r"\s+", " ", base)
     return base.strip()
+
+
+def normalize_search_text(value):
+    text = unicodedata.normalize("NFKD", value or "")
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    return " ".join(re.findall(r"[^\W_]+", text.casefold(), flags=re.UNICODE))
 
 
 def parse_year(name):
@@ -202,12 +209,15 @@ def parse_item(item, added_order):
         "source": item.get("source") or "",
         "url": item.get("url") or "webshare://{}".format(ident),
         "added_order": added_order,
-        "search_text": "{} {} {} {} {} {}".format(
-            title,
-            name,
-            ident,
-            parse_language(name),
-            parse_audio_type(name),
-            parse_subtitle_type(name),
-        ).lower(),
+        "search_text": normalize_search_text(
+            "{} {} {} {} {} {} {}".format(
+                title,
+                parse_catalog_title(name),
+                name,
+                ident,
+                parse_language(name),
+                parse_audio_type(name),
+                parse_subtitle_type(name),
+            )
+        ),
     }

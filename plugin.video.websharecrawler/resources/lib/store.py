@@ -7,6 +7,7 @@ import os
 import sqlite3
 import time
 
+from resources.lib.metadata import normalize_search_text
 from resources.lib.paths import profile_path
 
 
@@ -212,7 +213,7 @@ class AtlasStore(object):
         values = []
 
         if params.get("q"):
-            words = [word.lower() for word in params["q"].split() if word.strip()]
+            words = normalize_search_text(params["q"]).split()
             for word in words:
                 where.append("search_text LIKE ?")
                 values.append("%{}%".format(word))

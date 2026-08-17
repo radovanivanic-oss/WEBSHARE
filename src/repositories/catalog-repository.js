@@ -24,14 +24,55 @@ function truthy(value) {
 }
 
 function escapeFtsQuery(value) {
-  return String(value || "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean)
-    .map((token) => `"${token.replace(/"/g, "")}"*`)
+  return normalizeSearchTokens(value)
+    .map((token) => `"${token.folded.replace(/"/g, "")}"*`)
     .join(" AND ");
+}
+
+function normalizeSearchTokens(value) {
+  const rawTokens = String(value || "").normalize("NFKC").match(/[\p{L}\p{N}]+/gu) || [];
+  return rawTokens
+    .map((raw) => ({
+      raw,
+      folded: raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase(),
+    }))
+    .filter((token) => token.folded.length > 0);
+}
+
+function escapeLikePattern(value) {
+  return String(value).replace(/[\\%_]/g, "\\$&");
+}
+
+function fileSearchCondition(token, alias) {
+  const variants = [...new Set([token.raw.toLowerCase(), token.folded].filter(Boolean))];
+  const values = [];
+  const fields = ["ident", "original_name", "normalized_name", "parsed_title"];
+  const clauses = [];
+  for (const variant of variants) {
+    const pattern = `%${escapeLikePattern(variant)}%`;
+    for (const field of fields) {
+      clauses.push(`${alias}.${field} LIKE ? COLLATE NOCASE ESCAPE '\\'`);
+      values.push(pattern);
+    }
+  }
+  return {
+    sql: `(${clauses.join(" OR ")})`,
+    values,
+  };
+}
+
+function fileSearchClause(token, alias) {
+  const condition = fileSearchCondition(token, alias);
+  return {
+    sql: `EXISTS (
+      SELECT 1 FROM files ${alias}
+      WHERE ${alias}.media_id = m.id
+        AND ${alias}.is_active = 1
+        AND ${alias}.is_playable_video = 1
+        AND ${condition.sql}
+    )`,
+    values: condition.values,
+  };
 }
 
 function externalUrlFor(row) {
@@ -176,10 +217,29 @@ function createCatalogRepository(database, config) {
       where.push("m.metadata_status = 'matched'");
     }
     if (params.query) {
-      const fts = escapeFtsQuery(params.query);
-      if (fts) {
-        where.push("m.id IN (SELECT CAST(media_id AS INTEGER) FROM media_fts WHERE media_fts MATCH ?)");
-        values.push(fts);
+      where.push("EXISTS (SELECT 1 FROM files visible_file WHERE visible_file.media_id = m.id AND visible_file.is_active = 1 AND visible_file.is_playable_video = 1)");
+      for (const token of normalizeSearchTokens(params.query)) {
+        const fileSearch = fileSearchClause(token, "search_file");
+        if (/^(?:19|20)\d{2}$/u.test(token.folded)) {
+          const yearFileSearch = fileSearchCondition(token, "year_file");
+          where.push(`(
+            m.year = ?
+            OR EXISTS (
+              SELECT 1 FROM files year_file
+              WHERE year_file.media_id = m.id
+                AND year_file.is_active = 1
+                AND year_file.is_playable_video = 1
+                AND (year_file.parsed_year = ? OR ${yearFileSearch.sql})
+            )
+          )`);
+          values.push(Number(token.folded), Number(token.folded), ...yearFileSearch.values);
+          continue;
+        }
+        where.push(`(
+          m.id IN (SELECT CAST(media_id AS INTEGER) FROM media_fts WHERE media_fts MATCH ?)
+          OR ${fileSearch.sql}
+        )`);
+        values.push(escapeFtsQuery(token.folded), ...fileSearch.values);
       }
     }
     return { where: where.join(" AND "), values };
@@ -439,8 +499,10 @@ function createCatalogRepository(database, config) {
 module.exports = {
   CATEGORY_TITLES,
   createCatalogRepository,
+  escapeLikePattern,
   escapeFtsQuery,
   externalUrlFor,
+  normalizeSearchTokens,
   positiveInteger,
   serializeFile,
   serializeMedia,
