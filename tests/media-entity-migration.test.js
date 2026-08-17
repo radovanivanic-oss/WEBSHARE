@@ -63,7 +63,8 @@ test("controlled migration reassigns files, rehomes references, deletes only unr
   assert.equal(result.committed, true);
   assert.equal(result.transaction_count, 1);
   assert.equal(result.files_reassigned, 1);
-  assert.equal(result.entities_retired, 1);
+  assert.equal(result.source_entities_handled, 1);
+  assert.equal(result.entities_deleted, 1);
   const database = openCatalogDatabase(fixture.databasePath, { readonly: true, fileMustExist: true });
   try {
     assert.equal(database.prepare("SELECT media_id FROM files WHERE id=?").get(fixture.sourceFileId).media_id, fixture.canonicalId);
@@ -102,6 +103,30 @@ test("transaction exception rolls back every file and entity change and rerun fa
   database.close();
   await applyMediaEntityMigration(options(fixture));
   await assert.rejects(() => applyMediaEntityMigration(options(fixture)), /expected-count-drift|plan-count-drift/);
+});
+
+test("source entities with unapproved inactive files are retired rather than deleting the remaining file", async (t) => {
+  const local = await fixtureForTest(t);
+  const database = openCatalogDatabase(local.databasePath, { fileMustExist: true });
+  const source = database.prepare("SELECT * FROM files WHERE id=?").get(local.sourceFileId);
+  const columns = Object.keys(source).filter((key) => key !== "id");
+  const values = columns.map((key) => key === "ident" ? "source-extra" : key === "is_active" || key === "is_playable_video" ? 0 : source[key]);
+  database.prepare(`INSERT INTO files(${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`).run(...values);
+  local.before = readCounts(database);
+  local.plan.global.movie_entities = local.before.movie_entities;
+  local.plan.global.active_movie_entities = local.before.active_movie_entities;
+  local.plan.global.active_playable_movie_files = local.before.active_playable_movie_files;
+  database.close();
+  fs.writeFileSync(local.planPath, `${JSON.stringify(local.plan, null, 2)}\n`);
+  const result = await applyMediaEntityMigration({ ...options(local), expectedPlanSha256: sha256File(local.planPath) });
+  assert.equal(result.entities_deleted, 0);
+  assert.equal(result.entities_retired, 1);
+  const check = openCatalogDatabase(local.databasePath, { readonly: true, fileMustExist: true });
+  try {
+    assert.deepEqual(check.prepare("SELECT is_active FROM media WHERE id=?").get(local.sourceId), { is_active: 0 });
+    assert.equal(check.prepare("SELECT media_id FROM files WHERE ident='source-extra'").get().media_id, local.sourceId);
+    assert.equal(check.prepare("SELECT media_id FROM files WHERE id=?").get(local.sourceFileId).media_id, local.canonicalId);
+  } finally { check.close(); }
 });
 
 test("plan validation rejects conflicting media types and prohibited statuses", () => {
