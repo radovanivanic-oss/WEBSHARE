@@ -74,6 +74,7 @@ $(Get-AddonXmlBody (Join-Path $pluginDir "addon.xml"))
 $(Get-AddonXmlBody (Join-Path $repositoryDir "addon.xml"))
 </addons>
 "@
+$addonsXml = $addonsXml -replace "`r`n", "`n" -replace "`r", "`n"
 
 $addonsXmlPath = Join-Path $repoOut "addons.xml"
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

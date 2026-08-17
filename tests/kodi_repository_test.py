@@ -22,7 +22,7 @@ class KodiRepositoryTests(unittest.TestCase):
         self.assertEqual(addon.get("version"), "0.8.11")
         self.assertEqual(addon.get("provider-name"), "Radeco")
 
-        addons_bytes = (KODI_REPO / "addons.xml").read_bytes()
+        addons_bytes = (KODI_REPO / "addons.xml").read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
         expected_md5 = hashlib.md5(addons_bytes).hexdigest()
         self.assertEqual((KODI_REPO / "addons.xml.md5").read_text(encoding="ascii").strip(), expected_md5)
 
