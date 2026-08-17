@@ -18,6 +18,7 @@
     "db:migrate": "node scripts/migrate-catalog.js",
     "db:backup": "node scripts/backup-catalog.js",
     "media:audit": "node scripts/audit-media-entity-resolution.js",
+    "media:apply": "node scripts/apply-media-entity-resolution.js",
     "metadata:enrich": "node scripts/enrich-metadata.js",
     "api:start": "node server/catalog-api.js",
     "publish:github": "node publish-exports.js",
