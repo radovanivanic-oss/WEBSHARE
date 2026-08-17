@@ -1,0 +1,78 @@
+import hashlib
+import re
+import unittest
+import zipfile
+from pathlib import Path
+from xml.etree import ElementTree
+
+
+ROOT = Path(__file__).resolve().parents[1]
+ADDON_ID = "plugin.video.websharecrawler"
+ADDON_ROOT = ROOT / ADDON_ID
+KODI_REPO = ROOT / "kodi-repo"
+ZIP_PATH = KODI_REPO / ADDON_ID / (ADDON_ID + "-0.8.11.zip")
+EXPECTED_ZIP_SHA256 = "08a0a167e0dd8577c7280bf8a5a07567106b2b90f5db32600a6d3b4e1eee3fb5"
+
+
+class KodiRepositoryTests(unittest.TestCase):
+    def test_repository_metadata_advertises_webshare_atlas_0_8_11(self):
+        addons = ElementTree.parse(KODI_REPO / "addons.xml").getroot()
+        addon = next(item for item in addons.findall("addon") if item.get("id") == ADDON_ID)
+        self.assertEqual(addon.get("name"), "Webshare Atlas")
+        self.assertEqual(addon.get("version"), "0.8.11")
+        self.assertEqual(addon.get("provider-name"), "Radeco")
+
+        addons_bytes = (KODI_REPO / "addons.xml").read_bytes()
+        expected_md5 = hashlib.md5(addons_bytes).hexdigest()
+        self.assertEqual((KODI_REPO / "addons.xml.md5").read_text(encoding="ascii").strip(), expected_md5)
+
+    def test_repository_zip_matches_authoritative_addon_source(self):
+        self.assertTrue(ZIP_PATH.is_file())
+        self.assertEqual(hashlib.sha256(ZIP_PATH.read_bytes()).hexdigest(), EXPECTED_ZIP_SHA256)
+
+        source_files = {
+            path.relative_to(ROOT).as_posix(): path.read_bytes()
+            for path in ADDON_ROOT.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo"}
+        }
+        with zipfile.ZipFile(ZIP_PATH) as archive:
+            names = {name for name in archive.namelist() if not name.endswith("/")}
+            packaged_files = {name: archive.read(name) for name in names}
+
+        self.assertEqual(set(packaged_files), set(source_files))
+        self.assertEqual(packaged_files, source_files)
+        self.assertEqual({name.split("/", 1)[0] for name in names}, {ADDON_ID})
+
+        addon = ElementTree.fromstring(packaged_files[f"{ADDON_ID}/addon.xml"])
+        self.assertEqual(addon.get("id"), ADDON_ID)
+        self.assertEqual(addon.get("name"), "Webshare Atlas")
+        self.assertEqual(addon.get("version"), "0.8.11")
+
+    def test_final_zip_contains_search_fix_and_no_junk_or_secret_values(self):
+        with zipfile.ZipFile(ZIP_PATH) as archive:
+            names = archive.namelist()
+            text = "\n".join(
+                archive.read(name).decode("utf-8", errors="ignore")
+                for name in names
+                if not name.endswith("/")
+            )
+
+        forbidden = [
+            name
+            for name in names
+            if ".git/" in name
+            or "/tests/" in name
+            or "/runtime/" in name
+            or "__pycache__" in name
+            or name.endswith((".pyc", ".pyo"))
+        ]
+        self.assertEqual(forbidden, [])
+        self.assertIn('add_directory("Vyhľadávanie", "api_search")', text)
+        self.assertIn('if not isinstance(response, dict):', text)
+        self.assertIsNone(re.search(r"(?i)(password|passwd)\s*[:=]\s*['\"][^'\"]+", text))
+        self.assertIsNone(re.search(r"(?i)\b(wst|token|authorization|bearer|cookie|api[_-]?key|secret)\s*[:=]\s*['\"][^'\"]+", text))
+        self.assertNotIn("signature=", text.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()
