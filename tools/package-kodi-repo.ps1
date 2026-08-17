@@ -48,8 +48,21 @@ function Get-AddonXmlBody([string]$AddonXmlPath) {
   return $content.Trim()
 }
 
+function Normalize-StagingText([string]$RootPath) {
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  $textExtensions = @(".js", ".json", ".md", ".py", ".xml", ".txt")
+  Get-ChildItem -LiteralPath $RootPath -Recurse -File |
+    Where-Object { $_.Extension.ToLowerInvariant() -in $textExtensions } |
+    ForEach-Object {
+      $text = [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8)
+      $text = $text -replace "`r`n", "`n" -replace "`r", "`n"
+      [System.IO.File]::WriteAllText($_.FullName, $text, $utf8NoBom)
+    }
+}
+
 $pluginDir = Join-Path $root $PluginId
 $repositoryDir = Join-Path $root $RepositoryId
+$stagingRoot = Join-Path $root "runtime\kodi-repo-package"
 $pluginVersion = Get-AddonVersion (Join-Path $pluginDir "addon.xml")
 $repositoryVersion = Get-AddonVersion (Join-Path $repositoryDir "addon.xml")
 
@@ -59,9 +72,19 @@ New-Item -ItemType Directory -Force -Path (Join-Path $repoOut $RepositoryId) | O
 $pluginZip = Join-Path (Join-Path $repoOut $PluginId) "$PluginId-$pluginVersion.zip"
 $repositoryVersionedZip = Join-Path (Join-Path $repoOut $RepositoryId) "$RepositoryId-$repositoryVersion.zip"
 
-New-KodiZip $pluginDir $pluginZip
-New-KodiZip $repositoryDir $repositoryVersionedZip
-New-KodiZip $repositoryDir $installZip
+if (Test-Path $stagingRoot) {
+  Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
+$stagingPlugin = Join-Path $stagingRoot $PluginId
+$stagingRepository = Join-Path $stagingRoot $RepositoryId
+Copy-Item -LiteralPath $pluginDir -Destination $stagingRoot -Recurse
+Copy-Item -LiteralPath $repositoryDir -Destination $stagingRoot -Recurse
+Normalize-StagingText $stagingRoot
+
+New-KodiZip $stagingPlugin $pluginZip
+New-KodiZip $stagingRepository $repositoryVersionedZip
+New-KodiZip $stagingRepository $installZip
 
 $addonsXml = @"
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -92,6 +115,8 @@ finally {
 
 $hashText = -join ($hash | ForEach-Object { $_.ToString("x2") })
 [System.IO.File]::WriteAllText((Join-Path $repoOut "addons.xml.md5"), $hashText, [System.Text.Encoding]::ASCII)
+
+Remove-Item -LiteralPath $stagingRoot -Recurse -Force
 
 Write-Host "Created repository installer: $installZip"
 Write-Host "Created repository data: $repoOut"

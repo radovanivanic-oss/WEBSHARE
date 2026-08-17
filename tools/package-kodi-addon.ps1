@@ -27,6 +27,16 @@ Get-ChildItem -LiteralPath $stagingAddon -Recurse -File |
   Where-Object { $_.Extension -in @(".pyc", ".pyo") } |
   Remove-Item -Force
 
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$textExtensions = @(".js", ".json", ".md", ".py", ".xml", ".txt")
+Get-ChildItem -LiteralPath $stagingAddon -Recurse -File |
+  Where-Object { $_.Extension.ToLowerInvariant() -in $textExtensions } |
+  ForEach-Object {
+    $text = [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8)
+    $text = $text -replace "`r`n", "`n" -replace "`r", "`n"
+    [System.IO.File]::WriteAllText($_.FullName, $text, $utf8NoBom)
+  }
+
 if (Test-Path $zipPath) {
   Remove-Item -LiteralPath $zipPath -Force
 }

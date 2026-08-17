@@ -11,7 +11,15 @@ ADDON_ID = "plugin.video.websharecrawler"
 ADDON_ROOT = ROOT / ADDON_ID
 KODI_REPO = ROOT / "kodi-repo"
 ZIP_PATH = KODI_REPO / ADDON_ID / (ADDON_ID + "-0.8.12.zip")
-EXPECTED_ZIP_SHA256 = "45b772cc2c44f87e5b3277c070004b1aa5b18a2755b8571646d111763b9f723d"
+EXPECTED_ZIP_SHA256 = "9d9812551dcdb60cebeaf1c1b98ba55d70d15e6b727039004c9e414961617484"
+TEXT_EXTENSIONS = {".js", ".json", ".md", ".py", ".txt", ".xml"}
+
+
+def authoritative_bytes(path):
+    data = path.read_bytes()
+    if path.suffix.lower() not in TEXT_EXTENSIONS:
+        return data
+    return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
 
 
 class KodiRepositoryTests(unittest.TestCase):
@@ -31,7 +39,7 @@ class KodiRepositoryTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(ZIP_PATH.read_bytes()).hexdigest(), EXPECTED_ZIP_SHA256)
 
         source_files = {
-            path.relative_to(ROOT).as_posix(): path.read_bytes()
+            path.relative_to(ROOT).as_posix(): authoritative_bytes(path)
             for path in ADDON_ROOT.rglob("*")
             if path.is_file() and "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo"}
         }
