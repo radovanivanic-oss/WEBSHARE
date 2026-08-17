@@ -223,7 +223,7 @@ def fallback_art():
 
 
 def use_catalog_api():
-    return bool_setting("use_catalog_api", False)
+    return bool_setting("use_catalog_api", True)
 
 
 def catalog_api():
@@ -1019,6 +1019,8 @@ def add_api_media(media):
     }
     if media.get("release_date"):
         info["premiered"] = media["release_date"]
+    if media.get("release_date_precision"):
+        item.setProperty("ReleaseDatePrecision", str(media["release_date_precision"]))
     item.setInfo(
         "video",
         info,
@@ -1043,6 +1045,8 @@ def api_media_detail(params):
     page = int(params.get("page", "0"))
     try:
         detail = catalog_api().detail(media_id) or {}
+        if not isinstance(detail, dict):
+            raise CatalogApiError("Katalógové API vrátilo neplatný detail filmu")
         if detail.get("media_type") == "tv":
             live_metadata = {}
             try:
@@ -1053,7 +1057,13 @@ def api_media_detail(params):
             api_media_seasons(media_id, detail, meta)
             return
         file_response = catalog_api().files(media_id, page=page + 1, limit=page_size())
+        if not isinstance(file_response, dict):
+            raise CatalogApiError("Katalógové API vrátilo neplatné súbory")
         files = file_response.get("data", [])
+        if files is None:
+            files = []
+        if not isinstance(files, list) or any(not isinstance(file_row, dict) for file_row in files):
+            raise CatalogApiError("Katalógové API vrátilo neplatné súbory")
     except CatalogApiError as exc:
         notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
@@ -1062,6 +1072,8 @@ def api_media_detail(params):
     try:
         live_metadata = catalog_api().metadata(media_id) or {}
     except CatalogApiError:
+        live_metadata = {}
+    if not isinstance(live_metadata, dict):
         live_metadata = {}
     meta = api_detail_meta(detail, live_metadata)
     for file_row in files:
@@ -1073,6 +1085,8 @@ def api_media_detail(params):
 
 
 def api_detail_meta(detail, live_metadata):
+    detail = detail if isinstance(detail, dict) else {}
+    live_metadata = live_metadata if isinstance(live_metadata, dict) else {}
     meta = {
         "title": detail.get("title") or "",
         "original_title": detail.get("original_title") or "",
@@ -1717,7 +1731,7 @@ def decorate_label(row):
 def build_video_info(row, meta, title):
     is_movie = row["media_type"] == "movie"
     if is_movie:
-        plot = meta.get("overview") or "Popis filmu nie je dostupný."
+        plot = meta.get("overview") or "Popis nie je k dispozícii."
     else:
         plot = meta.get("overview") or technical_plot(row)
     plot = safe_text(plot)
