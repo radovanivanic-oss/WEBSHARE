@@ -6,6 +6,7 @@ const test = require("node:test");
 const { importCatalog } = require("../scripts/import-catalog-jsonl");
 const { openCatalogDatabase } = require("../src/db/catalog-db");
 const { applyMediaEntityMigration, readCounts, sha256File, validatePlan } = require("../lib/media-entity-migration");
+const { parseArgs } = require("../scripts/apply-media-entity-resolution");
 
 async function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "webshare-media-migration-"));
@@ -105,6 +106,17 @@ test("transaction exception rolls back every file and entity change and rerun fa
 
 test("plan validation rejects conflicting media types and prohibited statuses", () => {
   assert.throws(() => validatePlan({ mode: "READ_ONLY_DRY_RUN", global: {}, plan: { safe_groups: [{ status: "SAFE", group_key: "x", canonical: { id: 1 }, source_ids: [2], mergeable: [{ source: 2, target: 1, status: "PROVEN_DIFFERENT_MOVIE" }], rejected: [], files_to_reassign: [] }], partial_groups: [], ambiguous_groups: [], conflicting_groups: [], entities_affected: 1, files_affected: 0 } }), /invalid-merge-item/);
+});
+
+test("CLI baseline loader ignores non-count preflight metadata", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "webshare-media-cli-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const plan = path.join(directory, "plan.json");
+  const counts = path.join(directory, "counts.json");
+  fs.writeFileSync(plan, "{}");
+  fs.writeFileSync(counts, JSON.stringify({ repository_commit: "commit", quick_check: "ok", files: 1 }));
+  const parsed = parseArgs(["--database", "db", "--plan", plan, "--expected-plan-sha256", "hash", "--backup", "backup", "--output-dir", directory, "--expected-groups", "1", "--max-groups", "1", "--max-file-reassignments", "1", "--expected-counts-json", counts]);
+  assert.deepEqual(parsed.expectedCounts, { files: 1 });
 });
 
 async function fixtureForTest(t) {

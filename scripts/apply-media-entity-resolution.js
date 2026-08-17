@@ -20,7 +20,9 @@ function parseArgs(argv) {
     else throw new Error(`unknown argument: ${arg}`);
   }
   for (const key of ["databasePath", "planPath", "expectedPlanSha256", "backupPath", "outputDir", "expectedCountsPath"]) if (!options[key]) throw new Error(`missing-${key}`);
-  options.expectedCounts = JSON.parse(fs.readFileSync(path.resolve(options.expectedCountsPath), "utf8"));
+  const baseline = JSON.parse(fs.readFileSync(path.resolve(options.expectedCountsPath), "utf8"));
+  const countKeys = ["files", "active_files", "active_playable_files", "media", "movie_entities", "active_movie_entities", "active_playable_movie_files", "orphan_files", "duplicate_file_ownership"];
+  options.expectedCounts = Object.fromEntries(countKeys.filter((key) => Object.prototype.hasOwnProperty.call(baseline, key)).map((key) => [key, baseline[key]]));
   return options;
 }
 
