@@ -150,6 +150,18 @@ test("plan validation accepts an explicitly reviewed safe subset while preservin
   assert.deepEqual(validatePlan(plan), { sourceIds: [2], fileIds: [10], groupCount: 1 });
 });
 
+test("controlled migration executes reviewed additional groups", async (t) => {
+  const local = await fixtureForTest(t);
+  const group = local.plan.plan.safe_groups[0];
+  local.plan.plan.safe_groups = [];
+  local.plan.plan.approved_additional_groups = [{ ...group, status: "SAFE_APPROVED_SUBSET", approval: "B33_REVIEWED_SAFE_SUBSET", rejected: [{ source: 999, target: local.canonicalId, status: "AMBIGUOUS" }] }];
+  fs.writeFileSync(local.planPath, `${JSON.stringify(local.plan, null, 2)}\n`);
+  const result = await applyMediaEntityMigration({ ...options(local), expectedPlanSha256: sha256File(local.planPath) });
+  assert.equal(result.files_reassigned, 1);
+  const database = openCatalogDatabase(local.databasePath, { readonly: true, fileMustExist: true });
+  try { assert.equal(database.prepare("SELECT media_id FROM files WHERE id=?").get(local.sourceFileId).media_id, local.canonicalId); } finally { database.close(); }
+});
+
 test("CLI baseline loader ignores non-count preflight metadata", (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "webshare-media-cli-"));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
