@@ -26,6 +26,7 @@ async function fixture(t) {
   const sourceId = sourceFile.media_id;
   database.prepare("UPDATE media SET title='Počiatok',original_title='Inception',external_source='tmdb',external_id='27205',metadata_status='matched',metadata_confidence=0.98,year=2010,overview='Canonical',poster_url='https://image.test/poster.jpg',is_active=1 WHERE id=?").run(canonicalId);
   database.prepare("UPDATE media SET year=2010,is_active=1 WHERE id=?").run(sourceId);
+  database.prepare("INSERT INTO media_aliases(media_id,alias,normalized_alias,language,source,created_at) VALUES (?,?,?,?,?,?)").run(sourceId, "Inception", "inception", "en", "fixture", new Date().toISOString());
   const before = readCounts(database);
   database.close();
   const plan = {
