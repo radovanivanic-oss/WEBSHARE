@@ -133,6 +133,23 @@ test("plan validation rejects conflicting media types and prohibited statuses", 
   assert.throws(() => validatePlan({ mode: "READ_ONLY_DRY_RUN", global: {}, plan: { safe_groups: [{ status: "SAFE", group_key: "x", canonical: { id: 1 }, source_ids: [2], mergeable: [{ source: 2, target: 1, status: "PROVEN_DIFFERENT_MOVIE" }], rejected: [], files_to_reassign: [] }], partial_groups: [], ambiguous_groups: [], conflicting_groups: [], entities_affected: 1, files_affected: 0 } }), /invalid-merge-item/);
 });
 
+test("plan validation accepts an explicitly reviewed safe subset while preserving ambiguous exclusions", () => {
+  const plan = {
+    mode: "READ_ONLY_DRY_RUN", global: {},
+    plan: {
+      safe_groups: [], partial_groups: [], ambiguous_groups: [], conflicting_groups: [],
+      approved_additional_groups: [{
+        status: "SAFE_APPROVED_SUBSET", approval: "B33_REVIEWED_SAFE_SUBSET", group_key: "inception|2010",
+        canonical: { id: 1 }, source_ids: [2],
+        mergeable: [{ source: 2, target: 1, status: "STRONG_SAME_MOVIE" }],
+        rejected: [{ source: 3, target: 1, status: "AMBIGUOUS" }], files_to_reassign: [10],
+      }],
+      entities_affected: 1, files_affected: 1,
+    },
+  };
+  assert.deepEqual(validatePlan(plan), { sourceIds: [2], fileIds: [10], groupCount: 1 });
+});
+
 test("CLI baseline loader ignores non-count preflight metadata", (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "webshare-media-cli-"));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

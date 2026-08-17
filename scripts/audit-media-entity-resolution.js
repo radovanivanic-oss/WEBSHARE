@@ -48,7 +48,7 @@ function main() {
         same_title_year_groups: count(database, "SELECT COUNT(*) count FROM (SELECT lower(title),year,media_type FROM media WHERE media_type='movie' GROUP BY lower(title),year,media_type HAVING COUNT(*)>1)"),
         same_original_title_year_groups: count(database, "SELECT COUNT(*) count FROM (SELECT lower(original_title),year FROM media WHERE media_type='movie' AND original_title IS NOT NULL GROUP BY lower(original_title),year HAVING COUNT(*)>1)"),
       },
-      plan: { safe_groups: [], partial_groups: [], ambiguous_groups: [], conflicting_groups: [], entities_affected: 0, files_affected: 0 },
+      plan: { safe_groups: [], approved_additional_groups: [], partial_groups: [], ambiguous_groups: [], conflicting_groups: [], entities_affected: 0, files_affected: 0 },
     };
 
     const duplicateRows = database.prepare(`SELECT lower(title) title_key, year, GROUP_CONCAT(id) ids FROM media WHERE media_type='movie' AND is_active=1 GROUP BY lower(title),year HAVING COUNT(*)>1 ORDER BY COUNT(*) DESC, lower(title) LIMIT ?`).all(options.limit);
@@ -79,7 +79,24 @@ function main() {
       const ids = [...new Set(relevantFiles.map((file) => file.media_id))];
       const rows = mediaRows(database, ids);
       const byId = new Map(ids.map((id) => [id, relevantFiles.filter((file) => file.media_id === id)]));
-      report.inception = { current_entities: rows.length, active_playable_files: relevantFiles.length, files: relevantFiles.map((file) => ({ ident: file.ident, original_name: file.original_name, parsed_title: file.parsed_title, parsed_year: file.parsed_year, media_id: file.media_id, parser: parseMediaName(file.original_name) })), plan: planGroup(rows, byId) };
+      const inceptionPlan = planGroup(rows, byId);
+      report.inception = { current_entities: rows.length, active_playable_files: relevantFiles.length, files: relevantFiles.map((file) => ({ ident: file.ident, original_name: file.original_name, parsed_title: file.parsed_title, parsed_year: file.parsed_year, media_id: file.media_id, parser: parseMediaName(file.original_name) })), plan: inceptionPlan };
+      const approved = inceptionPlan.mergeable.filter((item) => item.status === "PROVEN_SAME_MOVIE" || item.status === "STRONG_SAME_MOVIE");
+      const approvedSources = new Set(approved.map((item) => item.source));
+      if (approved.length && inceptionPlan.rejected.every((item) => item.status === "AMBIGUOUS")) {
+        const approvedGroup = {
+          ...inceptionPlan,
+          status: "SAFE_APPROVED_SUBSET",
+          approval: "B33_REVIEWED_SAFE_SUBSET",
+          source_ids: approved.map((item) => item.source),
+          mergeable: approved,
+          files_to_reassign: relevantFiles.filter((file) => approvedSources.has(file.media_id)).map((file) => file.id),
+          rejected: inceptionPlan.rejected,
+        };
+        report.plan.approved_additional_groups.push(approvedGroup);
+        report.plan.entities_affected += approvedGroup.mergeable.length;
+        report.plan.files_affected += approvedGroup.files_to_reassign.length;
+      }
     }
     const text = JSON.stringify(report, null, 2);
     if (options.report) { fs.mkdirSync(path.dirname(path.resolve(options.report)), { recursive: true }); fs.writeFileSync(path.resolve(options.report), `${text}\n`); }
