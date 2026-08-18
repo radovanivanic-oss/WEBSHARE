@@ -229,7 +229,16 @@ function createCatalogRepository(database, config) {
       where.push("(m.release_date IS NOT NULL OR m.year IS NOT NULL)");
     }
     if (params.query) {
-      where.push("EXISTS (SELECT 1 FROM files visible_file WHERE visible_file.media_id = m.id AND visible_file.is_active = 1 AND visible_file.is_playable_video = 1)");
+      where.push(seriesListing
+        ? `EXISTS (
+          SELECT 1 FROM media visible_episode
+          JOIN files visible_file ON visible_file.media_id = visible_episode.id
+          WHERE visible_episode.tvshow_id = m.id
+            AND visible_episode.is_active = 1
+            AND visible_file.is_active = 1
+            AND visible_file.is_playable_video = 1
+        )`
+        : "EXISTS (SELECT 1 FROM files visible_file WHERE visible_file.media_id = m.id AND visible_file.is_active = 1 AND visible_file.is_playable_video = 1)");
       for (const token of normalizeSearchTokens(params.query)) {
         const fileSearch = fileSearchClause(token, "search_file");
         if (/^(?:19|20)\d{2}$/u.test(token.folded)) {
