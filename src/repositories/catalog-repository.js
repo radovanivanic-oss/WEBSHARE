@@ -303,8 +303,8 @@ function createCatalogRepository(database, config) {
         WHERE episode.tvshow_id IS NOT NULL
           AND episode.is_active = 1
           AND episode.release_date IS NOT NULL
-          AND episode.release_date = date(episode.release_date)
-          AND date(episode.release_date) <= date('now')
+          AND episode.release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+          AND episode.release_date <= date('now')
         GROUP BY episode.tvshow_id
       ),
       series_episode_year AS (
@@ -325,8 +325,8 @@ function createCatalogRepository(database, config) {
           series_episode_year.latest_episode_year,
           CASE
             WHEN series.release_date IS NOT NULL
-              AND series.release_date = date(series.release_date)
-              AND date(series.release_date) <= date('now')
+              AND series.release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+              AND series.release_date <= date('now')
             THEN series.release_date
           END AS series_release_date,
           series.year AS series_year
