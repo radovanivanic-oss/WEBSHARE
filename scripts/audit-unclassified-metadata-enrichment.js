@@ -148,7 +148,7 @@ function selectUnknownRowsByIds(database, ids) {
 }
 
 function selectStratifiedUnknownRows(database, limit) {
-  const bucketLimit = Math.max(1, Math.ceil(limit / 10));
+  const bucketLimit = Math.max(1, Math.ceil(limit / 5));
   const queries = [
     "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (SELECT COUNT(*) FROM files f WHERE f.media_id = m.id) = 1 ORDER BY m.id LIMIT ?",
     "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (SELECT COUNT(*) FROM files f WHERE f.media_id = m.id) > 1 ORDER BY m.id LIMIT ?",
@@ -161,9 +161,20 @@ function selectStratifiedUnknownRows(database, limit) {
     "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%concert%' ORDER BY m.id LIMIT ?",
     "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 ORDER BY m.id DESC LIMIT ?",
   ];
+  const buckets = queries.map((query) => database.prepare(query).all(bucketLimit).map((row) => row.id));
   const ids = new Set();
-  for (const query of queries) for (const row of database.prepare(query).all(bucketLimit)) ids.add(row.id);
-  return selectUnknownRowsByIds(database, [...ids].sort((left, right) => left - right).slice(0, limit));
+  for (let index = 0; ids.size < limit; index += 1) {
+    let added = false;
+    for (const bucket of buckets) {
+      if (bucket[index] !== undefined) {
+        ids.add(bucket[index]);
+        added = true;
+        if (ids.size >= limit) break;
+      }
+    }
+    if (!added) break;
+  }
+  return selectUnknownRowsByIds(database, [...ids]);
 }
 
 function selectControlRows(database, limit, offset = 0) {
