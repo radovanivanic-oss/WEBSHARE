@@ -157,6 +157,8 @@ test("read-only candidate audit is deterministic, preserves SQLite, and resumes 
   assert.equal(first.deterministic_sha256, second.deterministic_sha256);
   assert.equal(first.sqlite_write_performed, false);
   assert.deepEqual(fs.readFileSync(databasePath), before);
+  for (const artifact of ["classification-summary.json", "reason-distribution.json", "confidence-distribution.json", "category-proposals.json", "conflicts.json", "ambiguous-samples.json", "migration-candidates.json"]) assert.equal(fs.existsSync(path.join(firstDir, artifact)), true, artifact);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(firstDir, "migration-candidates.json"), "utf8")).candidate_count, 0);
   const resumedDir = path.join(directory, "resumed");
   const partial = await runMetadataEnrichmentAudit({ ...options, outputDir: resumedDir, limit: 1 });
   assert.equal(partial.results.length, 1);

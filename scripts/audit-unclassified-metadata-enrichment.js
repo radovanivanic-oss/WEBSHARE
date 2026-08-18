@@ -294,6 +294,38 @@ async function runMetadataEnrichmentAudit(options, dependencies = {}) {
     results: allResults,
   };
   const report = { ...core, deterministic_sha256: digest(core) };
+  const migrationCandidates = allResults
+    .filter((result) => result.state === "MATCHED" && ["PROVEN", "HIGH"].includes(result.confidence))
+    .map((result) => ({
+      media_id: result.media_id,
+      current_category: "unknown",
+      proposed_category: result.taxonomy?.primaryType || null,
+      secondary_tags: result.taxonomy?.secondaryTags || [],
+      confidence: result.confidence,
+      confidence_score: result.confidence_score,
+      reason_codes: result.reason_codes || [],
+      evidence_digest: result.evidence_digest,
+      file_count: result.file_count,
+      active: result.active,
+      provider: result.provider,
+      external_id: result.external_id,
+      provider_media_type: result.provider_media_type,
+      policy_version: MATCH_POLICY_VERSION,
+    }));
+  const reasonDistribution = {};
+  for (const result of allResults) for (const reason of result.reason_codes || []) reasonDistribution[reason] = (reasonDistribution[reason] || 0) + 1;
+  const categoryProposals = {};
+  for (const candidate of migrationCandidates) {
+    categoryProposals[candidate.proposed_category] = (categoryProposals[candidate.proposed_category] || 0) + 1;
+    for (const tag of candidate.secondary_tags) categoryProposals[tag] = (categoryProposals[tag] || 0) + 1;
+  }
+  atomicJson(path.join(outputDir, "classification-summary.json"), { audit_version: AUDIT_VERSION, policy_version: MATCH_POLICY_VERSION, mode: options.mode, entities: allResults.length, state_counts: byState, confidence_counts: byConfidence, sqlite_write_performed: false });
+  atomicJson(path.join(outputDir, "reason-distribution.json"), reasonDistribution);
+  atomicJson(path.join(outputDir, "confidence-distribution.json"), byConfidence);
+  atomicJson(path.join(outputDir, "category-proposals.json"), categoryProposals);
+  atomicJson(path.join(outputDir, "conflicts.json"), allResults.filter((result) => ["AMBIGUOUS", "RETRY_LATER", "FAILED"].includes(result.state)).slice(0, 200));
+  atomicJson(path.join(outputDir, "ambiguous-samples.json"), allResults.filter((result) => result.state === "AMBIGUOUS").slice(0, 200));
+  atomicJson(path.join(outputDir, "migration-candidates.json"), { schema_version: 1, policy_version: MATCH_POLICY_VERSION, sqlite_write_performed: false, candidate_count: migrationCandidates.length, plan_sha256: digest(migrationCandidates), candidates: migrationCandidates });
   atomicJson(path.join(outputDir, "enrichment-results.json"), report);
   atomicJson(path.join(outputDir, "checkpoint.json"), { schema_version: 1, audit_version: AUDIT_VERSION, start_offset: options.resume ? JSON.parse(fs.readFileSync(path.join(outputDir, "checkpoint.json"), "utf8")).start_offset ?? options.offset : options.offset, input_digest: resume.inputDigest, next_offset: effectiveOffset + results.length, processed: results.length, processed_total: allResults.length, state_counts: byState, provider_requests: counters.provider_requests, sqlite_write_performed: false, finished_reason: results.length < options.limit ? "completed" : "limit_reached" });
   atomicJson(path.join(outputDir, "audit.manifest.json"), { schema_version: 1, audit_version: AUDIT_VERSION, match_policy_version: MATCH_POLICY_VERSION, deterministic_sha256: report.deterministic_sha256, provider_requests: counters.provider_requests, sqlite_write_performed: false, database_read_only: true, results: allResults.length, resumable: true });
