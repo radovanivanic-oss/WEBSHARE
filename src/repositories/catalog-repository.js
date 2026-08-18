@@ -295,7 +295,7 @@ function createCatalogRepository(database, config) {
       ),
     ` : "";
     const seriesReleaseCte = seriesReleaseRecent ? `
-      series_release_base AS (
+      series_release_base AS MATERIALIZED (
         SELECT
           series.id,
           (
