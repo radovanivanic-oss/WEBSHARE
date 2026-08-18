@@ -174,6 +174,15 @@ function runDeepUnclassifiedAudit({ databasePath, batchSize = DEFAULT_BATCH_SIZE
   const selectMedia = database.prepare(buildMediaSelect());
   const reasonCounts = {};
   const confidenceCounts = {};
+  const signalCounts = {
+    anime_file_signal_entities: 0,
+    anime_multi_file_signal_entities: 0,
+    episode_structure_entities: 0,
+    documentary_file_signal_entities: 0,
+    music_video_file_signal_entities: 0,
+    concert_file_signal_entities: 0,
+    sport_file_signal_entities: 0,
+  };
   const categoryProposals = {};
   const buckets = {};
   const samples = {};
@@ -209,6 +218,13 @@ function runDeepUnclassifiedAudit({ databasePath, batchSize = DEFAULT_BATCH_SIZE
       activePlayableFiles += activePlayable;
       for (const reason of classification.reasonCodes) increment(reasonCounts, reason);
       increment(confidenceCounts, classification.confidenceClass);
+      if (fileEvidence.animeFiles > 0) increment(signalCounts, "anime_file_signal_entities");
+      if (fileEvidence.animeFiles >= 2) increment(signalCounts, "anime_multi_file_signal_entities");
+      if (fileEvidence.episodePatternFiles >= 3 || fileEvidence.episodeWordFiles >= 5) increment(signalCounts, "episode_structure_entities");
+      if (fileEvidence.documentaryFiles > 0) increment(signalCounts, "documentary_file_signal_entities");
+      if (fileEvidence.musicVideoFiles > 0) increment(signalCounts, "music_video_file_signal_entities");
+      if (fileEvidence.concertFiles > 0) increment(signalCounts, "concert_file_signal_entities");
+      if (fileEvidence.sportFiles > 0) increment(signalCounts, "sport_file_signal_entities");
 
       let bucket = "INSUFFICIENT_EVIDENCE";
       if (classification.confidenceClass === "CONFLICTING") bucket = "CONFLICTING_EVIDENCE";
@@ -284,6 +300,7 @@ function runDeepUnclassifiedAudit({ databasePath, batchSize = DEFAULT_BATCH_SIZE
     },
     buckets,
     confidence_counts: confidenceCounts,
+    signal_counts: signalCounts,
     reason_counts: reasonCounts,
     proposed_by_category: categoryProposals,
     proposed_active_by_category: activeCandidateCounts,

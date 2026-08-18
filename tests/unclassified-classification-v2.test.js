@@ -103,6 +103,7 @@ test("deep audit is read-only, batched and deterministic", () => {
     assert.equal(left.sqlite_write_performed, false);
     assert.equal(left.proposed_by_category.series, 1);
     assert.equal(left.proposed_by_category.documentaries, 1);
+    assert.equal(left.signal_counts.episode_structure_entities, 1);
     assert.deepEqual(left, right);
     const check = new Database(databasePath, { readonly: true });
     assert.equal(check.prepare("SELECT COUNT(*) AS count FROM media WHERE category='unknown'").get().count, 3);
