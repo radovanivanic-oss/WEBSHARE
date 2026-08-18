@@ -174,3 +174,22 @@ test("provider errors fail closed into retry state and never write SQLite", asyn
   assert.equal(result.state, "RETRY_LATER");
   assert.equal(counters.retry_later, 1);
 });
+
+test("control mode evaluates hidden persisted identities without using them as query input", async (t) => {
+  const directory = temporaryDirectory(t);
+  const databasePath = fixtureDatabase(directory);
+  const outputDir = path.join(directory, "control");
+  const provider = {
+    client: { get: async () => ({ status: 200, data: {} }) },
+    search: async () => [{ id: 123, title: "Known Film", release_date: "2020-01-01" }],
+    details: async () => ({ genres: [], keywords: [] }),
+  };
+  const report = await runMetadataEnrichmentAudit({
+    database: databasePath, outputDir, limit: 2, offset: 0, maxProviderRequests: 5,
+    provider: "tmdb", mode: "control", dryRun: true, maxQueriesPerEntity: 1,
+  }, { provider, config: { tmdbApiKey: "fixture" } });
+  assert.equal(report.control_metrics.correct_identity, 1);
+  assert.equal(report.control_metrics.wrong_identity, 0);
+  assert.equal(report.results[0].expected_identity_hidden, true);
+  assert.equal(Object.hasOwn(report.results[0], "external_id"), true);
+});

@@ -24,7 +24,7 @@ function digest(value) {
 }
 
 function parseArguments(argv) {
-  const options = { mode: "candidate-audit", limit: 100, offset: 0, maxProviderRequests: 0, provider: "tmdb", dryRun: false, maxQueriesPerEntity: 2 };
+  const options = { mode: "candidate-audit", limit: 100, offset: 0, maxProviderRequests: 0, provider: "tmdb", dryRun: false, maxQueriesPerEntity: 2, activeOnly: false, stratified: false };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--dry-run") options.dryRun = true;
@@ -36,6 +36,9 @@ function parseArguments(argv) {
     else if (value === "--provider") options.provider = argv[++index];
     else if (value === "--mode") options.mode = argv[++index];
     else if (value === "--resume") options.resume = true;
+    else if (value === "--active-only") options.activeOnly = true;
+    else if (value === "--stratified") options.stratified = true;
+    else if (value === "--cache-dir") options.cacheDir = argv[++index];
     else if (value === "--max-queries-per-entity") options.maxQueriesPerEntity = Number.parseInt(argv[++index], 10);
     else throw new Error(`Neplatný argument ${value}.`);
   }
@@ -43,9 +46,9 @@ function parseArguments(argv) {
   if (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 5000) throw new Error("limit musí byť 1..5000.");
   if (!Number.isSafeInteger(options.offset) || options.offset < 0) throw new Error("offset musí byť nezáporné celé číslo.");
   if (!Number.isSafeInteger(options.maxQueriesPerEntity) || options.maxQueriesPerEntity < 1 || options.maxQueriesPerEntity > 3) throw new Error("max-queries-per-entity musí byť 1..3.");
-  if (!new Set(["candidate-audit", "retrospective", "provider-sample"]).has(options.mode)) throw new Error("nepodporovaný mode.");
-  if (options.mode === "provider-sample" && (!options.dryRun || options.provider !== "tmdb" || !Number.isSafeInteger(options.maxProviderRequests) || options.maxProviderRequests < 1 || options.maxProviderRequests > 10000)) {
-    throw new Error("provider-sample vyžaduje --dry-run, --provider tmdb a provider request budget 1..10000.");
+  if (!new Set(["candidate-audit", "retrospective", "control", "provider-sample"]).has(options.mode)) throw new Error("nepodporovaný mode.");
+  if (["control", "provider-sample"].includes(options.mode) && (!options.dryRun || options.provider !== "tmdb" || !Number.isSafeInteger(options.maxProviderRequests) || options.maxProviderRequests < 1 || options.maxProviderRequests > 10000)) {
+    throw new Error("live mode vyžaduje --dry-run, --provider tmdb a provider request budget 1..10000.");
   }
   return options;
 }
@@ -126,6 +129,52 @@ function selectUnknownRows(database, limit, offset) {
     SELECT id, title, original_title, media_type, category, year, tvshow_id, metadata_status,
       metadata_confidence, external_source, external_id, genres_json, countries_json, languages_json, is_active
     FROM media WHERE category = 'unknown' ORDER BY id LIMIT ? OFFSET ?`).all(limit, offset);
+}
+
+function selectActiveUnknownRows(database, limit, offset) {
+  return database.prepare(`
+    SELECT id, title, original_title, media_type, category, year, tvshow_id, metadata_status,
+      metadata_confidence, external_source, external_id, genres_json, countries_json, languages_json, is_active
+    FROM media WHERE category = 'unknown' AND is_active = 1 ORDER BY id LIMIT ? OFFSET ?`).all(limit, offset);
+}
+
+function selectUnknownRowsByIds(database, ids) {
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  return database.prepare(`
+    SELECT id, title, original_title, media_type, category, year, tvshow_id, metadata_status,
+      metadata_confidence, external_source, external_id, genres_json, countries_json, languages_json, is_active
+    FROM media WHERE id IN (${placeholders}) ORDER BY id`).all(...ids);
+}
+
+function selectStratifiedUnknownRows(database, limit) {
+  const bucketLimit = Math.max(1, Math.ceil(limit / 10));
+  const queries = [
+    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (SELECT COUNT(*) FROM files f WHERE f.media_id = m.id) = 1 ORDER BY m.id LIMIT ?",
+    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (SELECT COUNT(*) FROM files f WHERE f.media_id = m.id) > 1 ORDER BY m.id LIMIT ?",
+    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND m.year IS NOT NULL ORDER BY m.id LIMIT ?",
+    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND m.year IS NULL ORDER BY m.id LIMIT ?",
+    "SELECT DISTINCT m.id FROM media m JOIN files f ON f.media_id = m.id WHERE m.category = 'unknown' AND m.is_active = 1 AND (f.parsed_season IS NOT NULL OR f.parsed_episode IS NOT NULL) ORDER BY m.id LIMIT ?",
+    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (m.title GLOB '*[一-龥]*' OR m.title GLOB '*[ぁ-ん]*' OR m.title GLOB '*[가-힣]*' OR m.title GLOB '*[А-я]*') ORDER BY m.id LIMIT ?",
+    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%document%' ORDER BY m.id LIMIT ?",
+    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%anime%' ORDER BY m.id LIMIT ?",
+    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%concert%' ORDER BY m.id LIMIT ?",
+    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 ORDER BY m.id DESC LIMIT ?",
+  ];
+  const ids = new Set();
+  for (const query of queries) for (const row of database.prepare(query).all(bucketLimit)) ids.add(row.id);
+  return selectUnknownRowsByIds(database, [...ids].sort((left, right) => left - right).slice(0, limit));
+}
+
+function selectControlRows(database, limit) {
+  const perType = Math.max(1, Math.floor(limit / 2));
+  const select = (type) => database.prepare(`
+    SELECT id, title, original_title, media_type, category, year, release_date, tvshow_id,
+      metadata_status, metadata_confidence, external_source, external_id,
+      genres_json, countries_json, languages_json, is_active
+    FROM media WHERE metadata_status = 'matched' AND media_type = ? AND external_source = 'tmdb'
+    ORDER BY id LIMIT ?`).all(type, perType);
+  return [...select("movie"), ...select("tv")].sort((left, right) => left.id - right.id).slice(0, limit);
 }
 
 function selectMatchedRows(database, limit, offset) {
@@ -237,6 +286,7 @@ function retrospectiveEntity(entity) {
 }
 
 async function runMetadataEnrichmentAudit(options, dependencies = {}) {
+  const startedAt = Date.now();
   const outputDir = path.resolve(options.outputDir);
   fs.mkdirSync(outputDir, { recursive: true });
   const databasePath = path.resolve(options.database);
@@ -245,7 +295,13 @@ async function runMetadataEnrichmentAudit(options, dependencies = {}) {
   const database = openCatalogDatabase(databasePath, { readonly: true, fileMustExist: true });
   const rows = options.mode === "retrospective"
     ? selectMatchedRows(database, options.limit, effectiveOffset)
-    : selectUnknownRows(database, options.limit, effectiveOffset);
+    : options.mode === "control"
+      ? selectControlRows(database, options.limit)
+      : options.stratified
+        ? selectStratifiedUnknownRows(database, options.limit)
+        : options.activeOnly
+          ? selectActiveUnknownRows(database, options.limit, effectiveOffset)
+          : selectUnknownRows(database, options.limit, effectiveOffset);
   const entities = buildEntityQueries(database, rows, rows.map((row) => row.id));
   const counters = {
     entities: entities.length, provider_requests: 0, search_requests: 0, detail_requests: 0,
@@ -256,17 +312,22 @@ async function runMetadataEnrichmentAudit(options, dependencies = {}) {
     for (const entity of entities) results.push(retrospectiveEntity(entity));
   } else {
     let provider = dependencies.provider || null;
-    if (options.mode === "provider-sample") {
+    if (["control", "provider-sample"].includes(options.mode)) {
       const config = dependencies.config || getCatalogConfig();
       if (!config.tmdbApiKey) throw new Error("TMDB_API_KEY_REQUIRED_FOR_PROVIDER_SAMPLE");
-      const cache = dependencies.cache || createMetadataFileCache({ root: path.join(outputDir, "cache"), provider: "tmdb", version: MATCH_POLICY_VERSION, ttlDays: 30 });
+      const cache = dependencies.cache || createMetadataFileCache({ root: options.cacheDir || path.join(outputDir, "cache"), provider: "tmdb", version: MATCH_POLICY_VERSION, ttlDays: 30 });
       provider = provider || new TmdbClient(config, null, { warn() {} }, { cacheStore: cache, onCacheHit: () => { counters.cache_hits += 1; } });
       createRequestMeter(provider, options.maxProviderRequests, counters);
     }
     for (const entity of entities) {
       const result = await matchEntity(entity, provider, options, counters);
-      results.push({ media_id: entity.media.id, title: entity.media.title, active: Boolean(entity.media.is_active), file_count: entity.files.length, ...result });
-      if (counters.provider_requests >= options.maxProviderRequests && options.mode === "provider-sample") break;
+      const control = options.mode === "control" ? {
+        expected_identity_hidden: true,
+        correct_identity: result.state === "MATCHED" && String(result.external_id) === String(entity.media.external_id),
+        correct_type: result.state === "MATCHED" && result.provider_media_type === entity.media.media_type,
+      } : {};
+      results.push({ media_id: entity.media.id, title: entity.media.title, active: Boolean(entity.media.is_active), file_count: entity.files.length, media_type: entity.media.media_type, ...result, ...control });
+      if (counters.provider_requests >= options.maxProviderRequests && ["control", "provider-sample"].includes(options.mode)) break;
     }
   }
   database.close();
@@ -290,10 +351,17 @@ async function runMetadataEnrichmentAudit(options, dependencies = {}) {
     counters,
     state_counts: byState,
     confidence_counts: byConfidence,
-    retrospective_top1_accuracy: options.mode === "retrospective" && allResults.length ? Number((allResults.filter((result) => result.correct_identity).length / allResults.length).toFixed(6)) : null,
+    retrospective_top1_accuracy: ["retrospective", "control"].includes(options.mode) && allResults.length ? Number((allResults.filter((result) => result.correct_identity).length / allResults.length).toFixed(6)) : null,
+    control_metrics: options.mode === "control" ? {
+      correct_identity: allResults.filter((result) => result.correct_identity).length,
+      wrong_identity: allResults.filter((result) => result.state === "MATCHED" && !result.correct_identity).length,
+      correct_type: allResults.filter((result) => result.correct_type).length,
+      wrong_type: allResults.filter((result) => result.state === "MATCHED" && !result.correct_type).length,
+    } : null,
+    sample_id_digest: digest(allResults.map((result) => result.media_id)),
     results: allResults,
   };
-  const report = { ...core, deterministic_sha256: digest(core) };
+  const report = { ...core, runtime_ms: Date.now() - startedAt, deterministic_sha256: digest(core) };
   const migrationCandidates = allResults
     .filter((result) => result.state === "MATCHED" && ["PROVEN", "HIGH"].includes(result.confidence))
     .map((result) => ({
