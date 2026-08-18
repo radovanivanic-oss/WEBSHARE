@@ -339,17 +339,56 @@ class KodiSearchTests(unittest.TestCase):
         added, _ended, add_patch, end_patch = self.capture_directory()
         with add_patch, end_patch:
             addon.search_menu()
-            addon.api_root_menu()
+            with mock.patch.object(addon, "catalog_api", return_value=mock.Mock(categories=mock.Mock(return_value=[]))):
+                addon.api_root_menu()
             addon.api_movies_menu()
             addon.api_series_menu()
 
         search_items = [
             (call, self.route_params(call))
             for call in added
-            if self.route_params(call).get("action") in ("search", "api_search")
+            if self.route_params(call).get("action") in ("search", "api_search", "api_search_menu")
         ]
         self.assertGreaterEqual(len(search_items), 8)
         self.assertTrue(all(call[1].get("isFolder") is True for call, _params in search_items))
+
+    def test_api_search_menu_exposes_only_populated_catalog_categories(self):
+        client = mock.Mock()
+        client.categories.return_value = [
+            {"id": "movies", "title": "Filmy", "count": 300849},
+            {"id": "series", "title": "Seriály", "count": 62989},
+            {"id": "concerts", "title": "Koncerty", "count": 1767},
+            {"id": "anime", "title": "Anime", "count": 0},
+        ]
+        added, ended, add_patch, end_patch = self.capture_directory()
+        with add_patch, end_patch, mock.patch.object(addon, "catalog_api", return_value=client):
+            addon.api_search_menu()
+        labels = [call[0][2].label for call in added]
+        self.assertEqual(labels, ["Všetko", "Filmy", "Seriály", "Hľadať Koncerty"])
+        routes = [self.route_params(call) for call in added]
+        self.assertEqual(routes[3]["category"], "concerts")
+        self.assertTrue(all(call[1].get("isFolder") is True for call in added))
+        self.assertEqual(ended[-1][1], {"succeeded": True})
+
+    def test_api_media_sets_category_specific_content_type(self):
+        client = mock.Mock()
+        client.media.return_value = {"data": [], "pagination": {"pages": 1, "has_more": False}}
+        content = []
+        with mock.patch.object(addon, "catalog_api", return_value=client), mock.patch.object(
+            addon.xbmcplugin, "setContent", side_effect=lambda *args: content.append(args[1])
+        ):
+            for category, expected in (("movies", "movies"), ("series", "tvshows"), ("concerts", "videos")):
+                with self.subTest(category=category):
+                    addon.api_media({"category": category})
+        self.assertEqual(content, ["movies", "tvshows", "videos"])
+
+    def test_api_media_uses_correct_kodi_mediatype_for_episode_and_video(self):
+        captured = []
+        with mock.patch.object(addon.xbmcplugin, "addDirectoryItem", side_effect=lambda *args, **kwargs: captured.append(args[2])):
+            addon.add_api_media({"id": 1, "title": "Fixture episode", "media_type": "episode", "year": 2024})
+            addon.add_api_media({"id": 2, "title": "Fixture concert", "media_type": "video", "year": 2024})
+        self.assertEqual(captured[0].info[1]["mediatype"], "episode")
+        self.assertEqual(captured[1].info[1]["mediatype"], "video")
 
     def test_catalog_api_is_the_default_movie_catalog_path(self):
         with mock.patch.object(addon.ADDON, "getSetting", return_value=""):

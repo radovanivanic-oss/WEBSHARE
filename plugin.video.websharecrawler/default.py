@@ -334,7 +334,7 @@ def root_menu():
 def api_root_menu():
     add_directory("[B]Rýchle hľadanie filmov[/B]", "api_search", {"category": "movies"})
     add_directory("[B]Rýchle hľadanie seriálov[/B]", "api_search", {"category": "series"})
-    add_directory("Vyhľadávanie", "api_search")
+    add_directory("Vyhľadávanie", "api_search_menu")
     add_directory("Filmy", "api_movies")
     add_directory("Seriály", "api_series")
     for label, category in (
@@ -352,6 +352,36 @@ def api_root_menu():
     add_directory("História", "history")
     add_command("Nastavenia", "settings")
     xbmcplugin.endOfDirectory(HANDLE)
+
+
+def api_search_menu():
+    """Render category-scoped catalog search without inventing empty sections."""
+    add_directory("Všetko", "api_search")
+    added_categories = set()
+    for label, category in (("Filmy", "movies"), ("Seriály", "series")):
+        add_directory(label, "api_search", {"category": category})
+        added_categories.add(category)
+
+    try:
+        categories = catalog_api().categories()
+    except CatalogApiError:
+        categories = []
+    if not isinstance(categories, list):
+        categories = []
+    for row in categories:
+        if not isinstance(row, dict):
+            continue
+        category = row.get("id")
+        try:
+            count = int(row.get("count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if not category or category in added_categories or count <= 0:
+            continue
+        label = row.get("title") or category
+        add_directory("Hľadať {}".format(label), "api_search", {"category": category})
+        added_categories.add(category)
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
 
 
 def api_movies_menu():
@@ -949,7 +979,9 @@ def api_media(params):
         pagination = {}
     has_more = bool(pagination.get("has_more")) if "has_more" in pagination else page + 1 < int(pagination.get("pages") or 0)
     add_next_page(has_more, "api_media", params, page)
-    xbmcplugin.setContent(HANDLE, "tvshows" if params.get("category") == "series" else "movies")
+    category = params.get("category")
+    content = "tvshows" if category == "series" else "movies" if category == "movies" else "videos"
+    xbmcplugin.setContent(HANDLE, content)
     xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
 
 
@@ -1015,7 +1047,12 @@ def add_api_media(media):
             [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in media.get("genres") or []]
         ),
         "rating": float(media.get("rating") or 0),
-        "mediatype": "tvshow" if media.get("media_type") == "tv" else "movie",
+        "mediatype": (
+            "tvshow" if media.get("media_type") == "tv" else
+            "episode" if media.get("media_type") == "episode" else
+            "movie" if media.get("media_type") == "movie" else
+            "video"
+        ),
     }
     if media.get("release_date"):
         info["premiered"] = media["release_date"]
@@ -1998,6 +2035,7 @@ def router():
     routes = {
         "root": root_menu,
         "search_menu": search_menu,
+        "api_search_menu": api_search_menu,
         "quick": quick_menu,
         "movies": movies_menu,
         "series": series_menu,
