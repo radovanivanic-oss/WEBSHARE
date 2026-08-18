@@ -330,7 +330,11 @@ async function runMetadataEnrichmentAudit(options, dependencies = {}) {
       const config = dependencies.config || getCatalogConfig();
       if (!config.tmdbApiKey) throw new Error("TMDB_API_KEY_REQUIRED_FOR_PROVIDER_SAMPLE");
       const cache = dependencies.cache || createMetadataFileCache({ root: options.cacheDir || path.join(outputDir, "cache"), provider: "tmdb", version: MATCH_POLICY_VERSION, ttlDays: 30 });
-      provider = provider || new TmdbClient(config, null, { warn() {} }, { cacheStore: cache, onCacheHit: () => { counters.cache_hits += 1; } });
+      provider = provider || new TmdbClient(config, null, { warn() {} }, {
+        cacheStore: cache,
+        onCacheHit: () => { counters.cache_hits += 1; },
+        minRequestIntervalMs: Math.ceil(60000 / config.tmdbLiveRateLimitPerMinute),
+      });
       createRequestMeter(provider, options.maxProviderRequests, counters);
     }
     for (const entity of entities) {

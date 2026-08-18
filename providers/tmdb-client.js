@@ -33,6 +33,8 @@ class TmdbClient {
     this.cacheStore = options.cacheStore || null;
     this.onCacheHit = options.onCacheHit || (() => {});
     this.onRequest = options.onRequest || (() => {});
+    this.minRequestIntervalMs = Math.max(0, Number(options.minRequestIntervalMs || 0));
+    this.lastRequestAt = 0;
     this.getCache = database ? database.prepare("SELECT * FROM metadata_cache WHERE cache_key = ? AND expires_at > ?") : null;
     this.putCache = database ? database.prepare(`
       INSERT INTO metadata_cache(
@@ -65,9 +67,10 @@ class TmdbClient {
     let lastError;
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       try {
-        if (this.config.tmdbRequestDelayMs > 0) {
-          await sleep(this.config.tmdbRequestDelayMs);
-        }
+        const elapsed = Date.now() - this.lastRequestAt;
+        const delay = Math.max(Number(this.config.tmdbRequestDelayMs || 0), this.minRequestIntervalMs - elapsed);
+        if (delay > 0) await sleep(delay);
+        this.lastRequestAt = Date.now();
         const response = await this.client.get(endpoint, {
           params: { ...requestParams, api_key: this.config.tmdbApiKey },
         });

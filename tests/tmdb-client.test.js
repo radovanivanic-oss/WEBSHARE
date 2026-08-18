@@ -130,3 +130,21 @@ test("live metadata can resolve local TV shows by title", async (t) => {
   assert.equal(cached.cached, true);
   assert.equal(cached.overview, payload.overview);
 });
+
+test("TMDb client enforces the configured minimum live request interval", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "webshare-tmdb-rate-test-"));
+  const databasePath = path.join(directory, "catalog.sqlite");
+  const database = openCatalogDatabase(databasePath);
+  t.after(() => {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const config = getCatalogConfig({ TMDB_API_KEY: "test-key", TMDB_REQUEST_DELAY_MS: "0", TMDB_LANGUAGE: "en-US", TMDB_FALLBACK_LANGUAGES: "en-US" });
+  migrateDatabase(database, config.migrationsDir, { logger: false });
+  const client = new TmdbClient(config, database, { warn() {} }, { minRequestIntervalMs: 20 });
+  client.client.get = async () => ({ status: 200, data: { ok: true } });
+  const started = Date.now();
+  await client.request("/one", {}, "en-US");
+  await client.request("/two", {}, "en-US");
+  assert.ok(Date.now() - started >= 15);
+});
