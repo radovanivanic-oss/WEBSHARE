@@ -6,6 +6,7 @@ const test = require("node:test");
 const { importCatalog } = require("../scripts/import-catalog-jsonl");
 const { openCatalogDatabase } = require("../src/db/catalog-db");
 const { applyUnclassifiedPurge, readPurgeData, readCounts, sha256File, validatePurgeData } = require("../lib/unclassified-purge");
+const { compactCatalog } = require("../lib/catalog-compaction");
 
 async function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "webshare-unclassified-purge-"));
@@ -116,4 +117,19 @@ test("second execution is not idempotently destructive and fails on the changed 
   const local = await fixture(t);
   await applyUnclassifiedPurge(applyOptions(local));
   await assert.rejects(() => applyUnclassifiedPurge(applyOptions(local)), /purge-plan-drift|purge-baseline-drift/);
+});
+
+test("compaction produces a validated compact copy without replacing the source by default", async (t) => {
+  const local = await fixture(t);
+  await applyUnclassifiedPurge(applyOptions(local));
+  const result = await compactCatalog({
+    databasePath: local.databasePath,
+    outputDir: path.join(local.directory, "compact-evidence"),
+    expected: { schema_version: 9, counts: local.plan.after_counts },
+  });
+  assert.equal(result.replacement, null);
+  assert.equal(result.after.files, local.plan.after_counts.files);
+  assert.ok(result.physical_after.size <= result.physical_before.size);
+  assert.equal(fs.existsSync(local.databasePath), true);
+  assert.equal(fs.existsSync(result.compact_path), true);
 });
