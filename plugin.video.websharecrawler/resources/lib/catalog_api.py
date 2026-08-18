@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-USER_AGENT = "Webshare Atlas Catalog API/0.8.13"
+USER_AGENT = "Webshare Atlas Catalog API/0.8.14"
 
 
 class CatalogApiError(Exception):
