@@ -160,6 +160,7 @@ function selectStratifiedUnknownRows(database, limit) {
     `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%document%' ORDER BY ${spreadOrder} LIMIT ?`,
     `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%anime%' ORDER BY ${spreadOrder} LIMIT ?`,
     `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%concert%' ORDER BY ${spreadOrder} LIMIT ?`,
+    `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND length(COALESCE(m.title, '')) BETWEEN 4 AND 120 AND m.title NOT GLOB '*[0-9]*' AND lower(COALESCE(m.title, '')) NOT LIKE '%anime%' AND lower(COALESCE(m.title, '')) NOT LIKE '%amv%' AND lower(COALESCE(m.title, '')) NOT LIKE '%concert%' AND lower(COALESCE(m.title, '')) NOT LIKE '%episode%' ORDER BY ${spreadOrder} LIMIT ?`,
     `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 ORDER BY ${spreadOrder} LIMIT ?`,
   ];
   const buckets = queries.map((query) => database.prepare(query).all(bucketLimit).map((row) => row.id));
