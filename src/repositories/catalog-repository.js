@@ -369,7 +369,9 @@ function createCatalogRepository(database, config) {
         LIMIT ? OFFSET ?
       )
       SELECT m.*, CASE WHEN m.media_type = 'tv' THEN (
-        SELECT COUNT(*) FROM media episode_media JOIN files episode_file ON episode_file.media_id = episode_media.id
+        SELECT COUNT(*) FROM media episode_media
+        JOIN files episode_file INDEXED BY idx_files_media_active_playable_recent
+          ON episode_file.media_id = episode_media.id
         WHERE episode_media.tvshow_id = m.id AND episode_file.is_active = 1 AND episode_file.is_playable_video = 1
       ) ELSE (
         SELECT COUNT(*) FROM files direct_file
