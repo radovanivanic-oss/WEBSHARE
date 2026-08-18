@@ -75,6 +75,23 @@ function fileSearchClause(token, alias) {
   };
 }
 
+function seriesFileSearchClause(token) {
+  const condition = fileSearchCondition(token, "series_search_file");
+  return {
+    sql: `EXISTS (
+      SELECT 1 FROM media series_search_episode
+      JOIN files series_search_file INDEXED BY idx_files_media_active_playable_recent
+        ON series_search_file.media_id = series_search_episode.id
+      WHERE series_search_episode.tvshow_id = m.id
+        AND series_search_episode.is_active = 1
+        AND series_search_file.is_active = 1
+        AND series_search_file.is_playable_video = 1
+        AND ${condition.sql.replaceAll("series_search_file.", "series_search_file.")}
+    )`,
+    values: condition.values,
+  };
+}
+
 function externalUrlFor(row) {
   if (row.external_url) return row.external_url;
   if (row.external_source !== "tmdb" || !row.external_id) return null;
@@ -240,7 +257,9 @@ function createCatalogRepository(database, config) {
         )`
         : "EXISTS (SELECT 1 FROM files visible_file WHERE visible_file.media_id = m.id AND visible_file.is_active = 1 AND visible_file.is_playable_video = 1)");
       for (const token of normalizeSearchTokens(params.query)) {
-        const fileSearch = fileSearchClause(token, "search_file");
+        const fileSearch = seriesListing
+          ? seriesFileSearchClause(token)
+          : fileSearchClause(token, "search_file");
         if (/^(?:19|20)\d{2}$/u.test(token.folded)) {
           const yearFileSearch = fileSearchCondition(token, "year_file");
           where.push(`(
