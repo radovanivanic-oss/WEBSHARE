@@ -149,17 +149,18 @@ function selectUnknownRowsByIds(database, ids) {
 
 function selectStratifiedUnknownRows(database, limit) {
   const bucketLimit = Math.max(1, Math.ceil(limit / 5));
+  const spreadOrder = "((CAST(m.id AS INTEGER) * 1103515245 + 12345) % 2147483647), m.id";
   const queries = [
-    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (SELECT COUNT(*) FROM files f WHERE f.media_id = m.id) = 1 ORDER BY m.id LIMIT ?",
-    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (SELECT COUNT(*) FROM files f WHERE f.media_id = m.id) > 1 ORDER BY m.id LIMIT ?",
-    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND m.year IS NOT NULL ORDER BY m.id LIMIT ?",
-    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND m.year IS NULL ORDER BY m.id LIMIT ?",
-    "SELECT DISTINCT m.id FROM media m JOIN files f ON f.media_id = m.id WHERE m.category = 'unknown' AND m.is_active = 1 AND (f.parsed_season IS NOT NULL OR f.parsed_episode IS NOT NULL) ORDER BY m.id LIMIT ?",
-    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (m.title GLOB '*[一-龥]*' OR m.title GLOB '*[ぁ-ん]*' OR m.title GLOB '*[가-힣]*' OR m.title GLOB '*[А-я]*') ORDER BY m.id LIMIT ?",
-    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%document%' ORDER BY m.id LIMIT ?",
-    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%anime%' ORDER BY m.id LIMIT ?",
-    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%concert%' ORDER BY m.id LIMIT ?",
-    "SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 ORDER BY m.id DESC LIMIT ?",
+    `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (SELECT COUNT(*) FROM files f WHERE f.media_id = m.id) = 1 ORDER BY ${spreadOrder} LIMIT ?`,
+    `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (SELECT COUNT(*) FROM files f WHERE f.media_id = m.id) > 1 ORDER BY ${spreadOrder} LIMIT ?`,
+    `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND m.year IS NOT NULL ORDER BY ${spreadOrder} LIMIT ?`,
+    `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND m.year IS NULL ORDER BY ${spreadOrder} LIMIT ?`,
+    `SELECT DISTINCT m.id FROM media m JOIN files f ON f.media_id = m.id WHERE m.category = 'unknown' AND m.is_active = 1 AND (f.parsed_season IS NOT NULL OR f.parsed_episode IS NOT NULL) ORDER BY ${spreadOrder} LIMIT ?`,
+    `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND (m.title GLOB '*[一-龥]*' OR m.title GLOB '*[ぁ-ん]*' OR m.title GLOB '*[가-힣]*' OR m.title GLOB '*[А-я]*') ORDER BY ${spreadOrder} LIMIT ?`,
+    `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%document%' ORDER BY ${spreadOrder} LIMIT ?`,
+    `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%anime%' ORDER BY ${spreadOrder} LIMIT ?`,
+    `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 AND lower(COALESCE(m.title, '')) LIKE '%concert%' ORDER BY ${spreadOrder} LIMIT ?`,
+    `SELECT m.id FROM media m WHERE m.category = 'unknown' AND m.is_active = 1 ORDER BY ${spreadOrder} LIMIT ?`,
   ];
   const buckets = queries.map((query) => database.prepare(query).all(bucketLimit).map((row) => row.id));
   const ids = new Set();
