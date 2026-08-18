@@ -166,14 +166,15 @@ function selectStratifiedUnknownRows(database, limit) {
   return selectUnknownRowsByIds(database, [...ids].sort((left, right) => left - right).slice(0, limit));
 }
 
-function selectControlRows(database, limit) {
+function selectControlRows(database, limit, offset = 0) {
   const perType = Math.max(1, Math.floor(limit / 2));
+  const typeOffset = Math.max(0, Math.floor(offset / 2));
   const select = (type) => database.prepare(`
     SELECT id, title, original_title, media_type, category, year, release_date, tvshow_id,
       metadata_status, metadata_confidence, external_source, external_id,
       genres_json, countries_json, languages_json, is_active
     FROM media WHERE metadata_status = 'matched' AND media_type = ? AND external_source = 'tmdb'
-    ORDER BY id LIMIT ?`).all(type, perType);
+    ORDER BY id LIMIT ? OFFSET ?`).all(type, perType, typeOffset);
   return [...select("movie"), ...select("tv")].sort((left, right) => left.id - right.id).slice(0, limit);
 }
 
@@ -296,7 +297,7 @@ async function runMetadataEnrichmentAudit(options, dependencies = {}) {
   const rows = options.mode === "retrospective"
     ? selectMatchedRows(database, options.limit, effectiveOffset)
     : options.mode === "control"
-      ? selectControlRows(database, options.limit)
+      ? selectControlRows(database, options.limit, effectiveOffset)
       : options.stratified
         ? selectStratifiedUnknownRows(database, options.limit)
         : options.activeOnly
