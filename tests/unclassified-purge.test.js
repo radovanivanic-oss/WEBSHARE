@@ -73,6 +73,7 @@ test("planner and controlled purge delete only unknown scope and preserve classi
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM files WHERE id IN (?,?)").get(...local.unknownFileIds).count, 0);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM media WHERE id=?").get(local.classifiedAnchor).count, 1);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM files WHERE id=?").get(local.orphanId).count, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM media_fts").get().count, 0);
     assert.equal(db.pragma("quick_check", { simple: true }), "ok");
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
     assert.equal(readCounts(db).files, before.files - 2);
@@ -129,6 +130,7 @@ test("compaction produces a validated compact copy without replacing the source 
   });
   assert.equal(result.replacement, null);
   assert.equal(result.after.files, local.plan.after_counts.files);
+  assert.equal(result.fts_after_rebuild.fts, result.after.media);
   assert.ok(result.physical_after.size <= result.physical_before.size);
   assert.equal(fs.existsSync(local.databasePath), true);
   assert.equal(fs.existsSync(result.compact_path), true);
