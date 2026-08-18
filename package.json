@@ -20,6 +20,7 @@
     "media:audit": "node scripts/audit-media-entity-resolution.js",
     "media:apply": "node scripts/apply-media-entity-resolution.js",
     "media:classify-unclassified:audit": "node scripts/audit-unclassified-classification.js",
+    "media:display-titles:audit": "node scripts/audit-display-titles.js",
     "metadata:enrich": "node scripts/enrich-metadata.js",
     "api:start": "node server/catalog-api.js",
     "publish:github": "node publish-exports.js",

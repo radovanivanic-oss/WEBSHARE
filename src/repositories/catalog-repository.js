@@ -1,5 +1,6 @@
 const fs = require("fs");
 const { getAppState, parseJson } = require("./media-repository");
+const { selectDisplayTitle } = require("./display-title");
 
 const CATEGORY_TITLES = {
   movies: "Filmy",
@@ -118,6 +119,9 @@ function serializeMedia(row) {
     category: row.category,
     is_active: Boolean(row.is_active),
     title: row.title,
+    display_title: row.display_title === undefined
+      ? row.title
+      : row.display_title,
     original_title: row.original_title,
     year: row.year,
     release_date: serializedReleaseDate ?? null,
@@ -188,6 +192,27 @@ function serializeFile(row) {
 }
 
 function createCatalogRepository(database, config) {
+  function displayTitlesForRows(rows) {
+    const ids = [...new Set(rows.map((row) => row.id).filter((id) => id !== undefined && id !== null))];
+    if (ids.length === 0) return rows;
+    const placeholders = ids.map(() => "?").join(",");
+    const aliasRows = database.prepare(`
+      SELECT media_id, alias, language, source
+      FROM media_aliases
+      WHERE media_id IN (${placeholders})
+      ORDER BY media_id, alias
+    `).all(...ids);
+    const aliasesById = new Map();
+    for (const alias of aliasRows) {
+      if (!aliasesById.has(alias.media_id)) aliasesById.set(alias.media_id, []);
+      aliasesById.get(alias.media_id).push(alias);
+    }
+    return rows.map((row) => ({
+      ...row,
+      display_title: selectDisplayTitle(row, aliasesById.get(row.id) || []),
+    }));
+  }
+
   function buildMediaQuery(params = {}) {
     const where = ["m.is_active = 1"];
     const values = [];
@@ -422,7 +447,7 @@ function createCatalogRepository(database, config) {
       ORDER BY ${sortColumn} ${order}, m.id ${order}
     `).all(...query.values, rowLimit, (page - 1) * limit);
     const hasMore = light && rows.length > limit;
-    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const pageRows = displayTitlesForRows(hasMore ? rows.slice(0, limit) : rows);
     return {
       data: pageRows.map(serializeMedia),
       pagination: {
@@ -458,6 +483,7 @@ function createCatalogRepository(database, config) {
     if (!row) return null;
     const media = serializeMedia(row);
     media.aliases = database.prepare("SELECT alias, language, source FROM media_aliases WHERE media_id = ? ORDER BY alias").all(id);
+    media.display_title = selectDisplayTitle(row, media.aliases);
     return media;
   }
 
@@ -507,7 +533,7 @@ function createCatalogRepository(database, config) {
       LIMIT ? OFFSET ?
     `).all(...values, limit, (page - 1) * limit);
     return {
-      data: rows.map(serializeMedia),
+      data: displayTitlesForRows(rows).map(serializeMedia),
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
     };
   }

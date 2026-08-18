@@ -7,6 +7,7 @@ const { importCatalog, readJsonLines } = require("../scripts/import-catalog-json
 const { createCatalogApi } = require("../server/catalog-api");
 const { getCatalogConfig } = require("../src/config/catalog-config");
 const { openCatalogDatabase } = require("../src/db/catalog-db");
+const { rebuildMediaFts } = require("../src/repositories/media-repository");
 
 function fixtureItems() {
   return [
@@ -98,6 +99,7 @@ test("catalog API paginates, limits output and exposes versions without tokens",
     assert.equal(listing.json().data.length, 1);
     const media = listing.json().data[0];
     assert.equal(media.versions, 2);
+    assert.equal(media.display_title, media.title);
 
     const files = await app.inject({ method: "GET", url: `/api/media/${media.id}/files` });
     assert.equal(files.statusCode, 200);
@@ -207,6 +209,33 @@ test("movie news use release dates and metadata failures do not block files", as
     assert.equal(files.json().data[0].original_name, files.json().data[0].name);
     assert.equal(files.json().data[0].size_bytes, files.json().data[0].size);
     assert.equal(files.json().data[0].is_active, true);
+  } finally {
+    await app.close();
+    database.close();
+  }
+});
+
+test("API exposes a safe display title while preserving identity and search aliases", async (t) => {
+  const fixture = await createImportedFixture(t);
+  const database = openCatalogDatabase(fixture.databasePath, { fileMustExist: true });
+  const movie = database.prepare("SELECT * FROM media WHERE media_type = 'movie' AND is_active = 1 LIMIT 1").get();
+  database.prepare("UPDATE media SET title = ?, original_title = ?, metadata_status = 'matched', metadata_confidence = 0.98 WHERE id = ?")
+    .run("入戏", "入戏", movie.id);
+  database.prepare("INSERT INTO media_aliases(media_id, alias, normalized_alias, language, source, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(movie.id, "Deep In The Act", "deep in the act", "en", "tmdb", new Date().toISOString());
+  rebuildMediaFts(database, movie.id);
+  const config = { ...getCatalogConfig({ CATALOG_DB_PATH: fixture.databasePath }), apiBasePath: "/api" };
+  const app = createCatalogApi({ config, database, skipMigrations: true, logger: false });
+  try {
+    const listing = await app.inject({ method: "GET", url: "/api/media?category=movies&page=1&limit=50" });
+    assert.equal(listing.statusCode, 200);
+    const row = listing.json().data.find((item) => item.id === movie.id);
+    assert.equal(row.title, "入戏");
+    assert.equal(row.original_title, "入戏");
+    assert.equal(row.display_title, "Deep In The Act");
+    const search = await app.inject({ method: "GET", url: "/api/search/movies?q=Deep%20In%20The%20Act" });
+    assert.equal(search.statusCode, 200);
+    assert.equal(search.json().data.some((item) => item.id === movie.id), true);
   } finally {
     await app.close();
     database.close();

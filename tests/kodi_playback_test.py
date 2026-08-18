@@ -390,6 +390,21 @@ class KodiSearchTests(unittest.TestCase):
         self.assertEqual(captured[0].info[1]["mediatype"], "episode")
         self.assertEqual(captured[1].info[1]["mediatype"], "video")
 
+    def test_api_media_prefers_central_display_title_and_preserves_original_title(self):
+        captured = []
+        with mock.patch.object(addon.xbmcplugin, "addDirectoryItem", side_effect=lambda *args, **kwargs: captured.append(args[2])):
+            addon.add_api_media({
+                "id": 1,
+                "title": "결혼의 완성",
+                "display_title": "Marriage's Completion",
+                "original_title": "결혼의 완성",
+                "media_type": "tv",
+                "year": 2026,
+            })
+        self.assertEqual(captured[0].label, "Marriage's Completion [2026]")
+        self.assertEqual(captured[0].info[1]["title"], "Marriage's Completion")
+        self.assertEqual(captured[0].info[1]["originaltitle"], "결혼의 완성")
+
     def test_catalog_api_is_the_default_movie_catalog_path(self):
         with mock.patch.object(addon.ADDON, "getSetting", return_value=""):
             self.assertTrue(addon.use_catalog_api())

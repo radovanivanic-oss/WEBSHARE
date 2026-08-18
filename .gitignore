@@ -9,6 +9,8 @@ data/
 catalog-publications/
 *.log
 *.tmp
+__pycache__/
+*.pyc
 videos_all.json
 videos_all.json.gz
 videos_filtered.json

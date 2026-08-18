@@ -1024,7 +1024,7 @@ def hydrate_api_listing_metadata(items):
 
 
 def add_api_media(media):
-    title = media.get("title") or "Bez názvu"
+    title = media.get("display_title") or media.get("title") or "Bez názvu"
     year = media.get("year")
     versions = int(media.get("versions") or 0)
     label_parts = [str(year)] if year else []
@@ -1040,7 +1040,7 @@ def add_api_media(media):
     item = xbmcgui.ListItem(label="{} [{}]".format(title, " | ".join(label_parts)) if label_parts else title)
     info = {
         "title": title,
-        "originaltitle": media.get("original_title") or "",
+        "originaltitle": media.get("original_title") or media.get("title") or "",
         "plot": media.get("overview") or "",
         "plotoutline": media.get("overview") or "",
         "year": int(year or 0),
@@ -1126,7 +1126,7 @@ def api_detail_meta(detail, live_metadata):
     detail = detail if isinstance(detail, dict) else {}
     live_metadata = live_metadata if isinstance(live_metadata, dict) else {}
     meta = {
-        "title": detail.get("title") or "",
+        "title": detail.get("display_title") or detail.get("title") or "",
         "original_title": detail.get("original_title") or "",
         "overview": live_metadata.get("overview") or detail.get("overview") or "",
         "genres": live_metadata.get("genres") or [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in detail.get("genres") or []],
@@ -1168,7 +1168,7 @@ def api_media_seasons(media_id, detail, meta=None):
             "video",
             {
                 "title": label,
-                "tvshowtitle": detail.get("title") or "",
+                "tvshowtitle": detail.get("display_title") or detail.get("title") or "",
                 "plot": plot,
                 "plotoutline": plot,
                 "year": safe_int(meta.get("year") or detail.get("year")),
