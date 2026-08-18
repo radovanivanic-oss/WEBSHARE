@@ -16,7 +16,9 @@ const CONTROL_RE = /[\u0000-\u001F\u007F]/u;
 const TECHNICAL_TOKEN_RE = /(?:\b(?:2160p|1080p|720p|576p|480p|4k|8k|web[- .]?dl|web[- .]?rip|bluray|brrip|remux|x26[45]|h\.?26[45]|aac|ac3|dts|hdr|dolby[ .-]?vision|cam|ts|telesync|s\d{1,2}e\d{1,3})\b)/iu;
 
 function text(value) {
-  return String(value || "").normalize("NFKC").trim();
+  // Do not normalize identity or native display text. NFKC would rewrite
+  // legitimate full-width punctuation in otherwise readable titles.
+  return String(value || "").trim();
 }
 
 function hasLetters(value) {

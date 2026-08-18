@@ -31,6 +31,7 @@ test("explicit localized alias language is preferred and native Unicode is prese
   assert.equal(selectDisplayTitle(media("原題"), [tmdb("Original Title", "en"), tmdb("Pôvodný názov", "sk")]), "Pôvodný názov");
   assert.equal(selectDisplayTitle(media("鬼滅の刃"), []), "鬼滅の刃");
   assert.equal(selectDisplayTitle(media("Oasis"), [tmdb("Oasis", "en")]), "Oasis");
+  assert.equal(selectDisplayTitle(media("BanG Dream！梦想妄想世界"), []), "BanG Dream！梦想妄想世界");
 });
 
 test("unsafe or untrusted aliases never become display titles", () => {
