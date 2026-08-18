@@ -398,7 +398,8 @@ def api_movies_menu():
 
 
 def api_series_menu():
-    add_directory("Novinky", "api_media", {"category": "series", "sort": "recent", "order": "desc"})
+    add_directory("Novinky", "api_media", {"category": "series", "sort": "series_release_date_desc", "order": "desc"})
+    add_directory("Najnovšie pridané", "api_media", {"category": "series", "sort": "recent", "order": "desc"})
     add_directory("Všetky seriály", "api_media", {"category": "series", "sort": "title", "order": "asc"})
     add_directory("Najlepšie hodnotené", "api_media", {"category": "series", "sort": "rating", "order": "desc"})
     add_directory("Roky", "api_years", {"category": "series"})

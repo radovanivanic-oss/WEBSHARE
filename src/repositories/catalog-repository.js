@@ -90,7 +90,10 @@ function externalUrlFor(row) {
 function serializeMedia(row) {
   if (!row) return null;
   const externalUrl = externalUrlFor(row);
-  const releaseDate = String(row.release_date || "").trim();
+  const hasEffectiveRelease = Object.prototype.hasOwnProperty.call(row, "effective_release_date");
+  const serializedReleaseDate = hasEffectiveRelease ? row.effective_release_date : row.release_date;
+  const releaseDate = String(serializedReleaseDate || "").trim();
+  const releaseYear = hasEffectiveRelease ? row.effective_release_year : row.year;
   return {
     id: row.id,
     media_key: row.media_key,
@@ -100,12 +103,16 @@ function serializeMedia(row) {
     title: row.title,
     original_title: row.original_title,
     year: row.year,
-    release_date: row.release_date,
+    release_date: serializedReleaseDate ?? null,
     release_date_precision: /^\d{4}-\d{2}-\d{2}$/u.test(releaseDate)
       ? "day"
-      : row.year
+      : row.effective_release_precision || (releaseYear
         ? "year"
-        : null,
+        : null),
+    latest_release_date: row.effective_release_date ?? null,
+    latest_release_precision: row.effective_release_precision || null,
+    latest_episode_date: row.latest_episode_date ?? null,
+    latest_episode_year: row.latest_episode_year ?? null,
     external_source: row.external_source,
     external_id: row.external_id,
     external_url: externalUrl,
@@ -255,6 +262,7 @@ function createCatalogRepository(database, config) {
     const limit = Math.min(config.apiMaxPageSize, positiveInteger(params.limit, 50));
     const light = truthy(params.light);
     const seriesRecent = params.category === "series" && !params.type && (params.sort || "recent") === "recent";
+    const seriesReleaseRecent = params.category === "series" && !params.type && params.sort === "series_release_date_desc";
     const order = params.sort === "release_date_desc"
       ? "DESC"
       : String(params.order || "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
@@ -264,8 +272,11 @@ function createCatalogRepository(database, config) {
       year: "m.year",
       rating: "m.rating",
       release_date_desc: "COALESCE(m.release_date, printf('%04d-01-01', m.year))",
+      series_release_date_desc: "series_release.effective_sort_key",
     };
-    const sortColumn = seriesRecent ? "series_activity.latest_file_id" : sortColumns[params.sort] || sortColumns.recent;
+    const sortColumn = seriesReleaseRecent
+      ? sortColumns.series_release_date_desc
+      : seriesRecent ? "series_activity.latest_file_id" : sortColumns[params.sort] || sortColumns.recent;
     const query = buildMediaQuery(params);
     const total = light
       ? null
@@ -283,12 +294,75 @@ function createCatalogRepository(database, config) {
         GROUP BY episode.tvshow_id
       ),
     ` : "";
+    const seriesReleaseCte = seriesReleaseRecent ? `
+      series_release_base AS (
+        SELECT
+          series.id,
+          MAX(CASE
+            WHEN episode.release_date IS NOT NULL
+              AND episode.release_date = date(episode.release_date)
+              AND date(episode.release_date) <= date('now')
+            THEN episode.release_date
+          END) AS latest_episode_date,
+          MAX(CASE
+            WHEN episode.year IS NOT NULL
+              AND episode.year <= CAST(strftime('%Y', 'now') AS INTEGER)
+            THEN episode.year
+          END) AS latest_episode_year,
+          CASE
+            WHEN series.release_date IS NOT NULL
+              AND series.release_date = date(series.release_date)
+              AND date(series.release_date) <= date('now')
+            THEN series.release_date
+          END AS series_release_date,
+          series.year AS series_year
+        FROM media series
+        LEFT JOIN media episode
+          ON episode.tvshow_id = series.id
+          AND episode.is_active = 1
+        WHERE series.media_type = 'tv' AND series.is_active = 1
+        GROUP BY series.id
+      ),
+      series_release AS (
+        SELECT
+          id,
+          latest_episode_date,
+          latest_episode_year,
+          COALESCE(latest_episode_date, series_release_date) AS effective_release_date,
+          CASE
+            WHEN latest_episode_date IS NOT NULL OR series_release_date IS NOT NULL THEN 'day'
+            WHEN latest_episode_year IS NOT NULL OR (series_year IS NOT NULL AND series_year <= CAST(strftime('%Y', 'now') AS INTEGER)) THEN 'year'
+            ELSE NULL
+          END AS effective_release_precision,
+          CASE
+            WHEN latest_episode_date IS NOT NULL THEN latest_episode_date
+            WHEN series_release_date IS NOT NULL THEN series_release_date
+            WHEN latest_episode_year IS NOT NULL THEN printf('%04d-01-01', latest_episode_year)
+            WHEN series_year IS NOT NULL AND series_year <= CAST(strftime('%Y', 'now') AS INTEGER) THEN printf('%04d-01-01', series_year)
+            ELSE '0000-01-01'
+          END AS effective_sort_key,
+          CASE
+            WHEN latest_episode_year IS NOT NULL THEN latest_episode_year
+            WHEN series_year IS NOT NULL AND series_year <= CAST(strftime('%Y', 'now') AS INTEGER) THEN series_year
+          END AS effective_release_year
+        FROM series_release_base
+      ),
+    ` : "";
     const seriesActivityJoin = seriesRecent ? "JOIN series_activity ON series_activity.id = m.id" : "";
+    const seriesReleaseJoin = seriesReleaseRecent ? "JOIN series_release ON series_release.id = m.id" : "";
+    const seriesReleaseProjection = seriesReleaseRecent ? `,
+      series_release.effective_release_date,
+      series_release.effective_release_precision,
+      series_release.effective_release_year,
+      series_release.latest_episode_date,
+      series_release.latest_episode_year
+    ` : "";
     const rows = database.prepare(`
-      WITH ${seriesActivityCte} page_media AS (
+      WITH ${seriesActivityCte}${seriesReleaseCte} page_media AS (
         SELECT m.id
         FROM media m
         ${seriesActivityJoin}
+        ${seriesReleaseJoin}
         WHERE ${query.where}
         ORDER BY ${sortColumn} ${order}, m.id ${order}
         LIMIT ? OFFSET ?
@@ -309,9 +383,11 @@ function createCatalogRepository(database, config) {
           best_file.size_bytes DESC
         LIMIT 1
       ) END AS best_quality
+      ${seriesReleaseProjection}
       FROM media m
       JOIN page_media ON page_media.id = m.id
       ${seriesActivityJoin}
+      ${seriesReleaseJoin}
       ORDER BY ${sortColumn} ${order}, m.id ${order}
     `).all(...query.values, rowLimit, (page - 1) * limit);
     const hasMore = light && rows.length > limit;

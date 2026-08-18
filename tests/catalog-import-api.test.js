@@ -212,3 +212,43 @@ test("movie news use release dates and metadata failures do not block files", as
     database.close();
   }
 });
+
+test("series new releases use the newest non-future episode date with deterministic fallbacks", async (t) => {
+  const fixture = await createImportedFixture(t);
+  const database = openCatalogDatabase(fixture.databasePath, { fileMustExist: true });
+  const now = new Date().toISOString();
+  const series = database.prepare("SELECT * FROM media WHERE media_type = 'tv' AND is_active = 1 LIMIT 1").get();
+  const episode = database.prepare("SELECT * FROM media WHERE tvshow_id = ? LIMIT 1").get(series.id);
+  database.prepare("UPDATE media SET release_date = '2020-01-01', year = 2020 WHERE id = ?").run(series.id);
+  database.prepare("UPDATE media SET release_date = '2026-02-01', year = 2026 WHERE id = ?").run(episode.id);
+  const insertSeries = database.prepare(`
+    INSERT INTO media(media_key, media_type, category, title, year, release_date,
+      metadata_status, metadata_confidence, created_at, updated_at, is_active)
+    VALUES (?, 'tv', 'series', ?, ?, ?, 'local', 0.8, ?, ?, 1)
+  `);
+  const futureId = Number(insertSeries.run("local:future-series", "Future Series", 2024, "2099-01-01", now, now).lastInsertRowid);
+  const yearOnlyId = Number(insertSeries.run("local:year-only-series", "Year Only Series", 2025, null, now, now).lastInsertRowid);
+  const config = { ...getCatalogConfig({ CATALOG_DB_PATH: fixture.databasePath }), apiBasePath: "/api" };
+  const app = createCatalogApi({ config, database, skipMigrations: true, logger: false });
+  try {
+    const listing = await app.inject({ method: "GET", url: "/api/media?category=series&sort=series_release_date_desc&page=1&limit=50" });
+    assert.equal(listing.statusCode, 200);
+    const data = listing.json().data;
+    assert.equal(data[0].id, series.id);
+    assert.equal(data[0].latest_episode_date, "2026-02-01");
+    assert.equal(data[0].release_date, "2026-02-01");
+    assert.equal(data[0].release_date_precision, "day");
+    assert.ok(data.findIndex((item) => item.id === yearOnlyId) < data.findIndex((item) => item.id === futureId));
+    const future = data.find((item) => item.id === futureId);
+    assert.equal(future.release_date, null);
+    assert.equal(future.release_date_precision, "year");
+    assert.deepEqual(data.map((item) => item.id), [...data].sort((left, right) => {
+      const leftDate = left.release_date || `${left.year || 0}-01-01`;
+      const rightDate = right.release_date || `${right.year || 0}-01-01`;
+      return rightDate.localeCompare(leftDate) || right.id - left.id;
+    }).map((item) => item.id));
+  } finally {
+    await app.close();
+    database.close();
+  }
+});
