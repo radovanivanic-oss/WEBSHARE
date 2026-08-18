@@ -21,7 +21,7 @@ function isTemporaryError(error) {
 }
 
 class TmdbClient {
-  constructor(config, database, logger = console) {
+  constructor(config, database, logger = console, options = {}) {
     this.config = config;
     this.database = database;
     this.logger = logger;
@@ -30,8 +30,11 @@ class TmdbClient {
       timeout: 20000,
       headers: { Accept: "application/json", "User-Agent": "Webshare Media Server/1.0" },
     });
-    this.getCache = database.prepare("SELECT * FROM metadata_cache WHERE cache_key = ? AND expires_at > ?");
-    this.putCache = database.prepare(`
+    this.cacheStore = options.cacheStore || null;
+    this.onCacheHit = options.onCacheHit || (() => {});
+    this.onRequest = options.onRequest || (() => {});
+    this.getCache = database ? database.prepare("SELECT * FROM metadata_cache WHERE cache_key = ? AND expires_at > ?") : null;
+    this.putCache = database ? database.prepare(`
       INSERT INTO metadata_cache(
         cache_key, provider, endpoint, language, response_json, http_status,
         expires_at, created_at, updated_at
@@ -41,7 +44,7 @@ class TmdbClient {
         http_status = excluded.http_status,
         expires_at = excluded.expires_at,
         updated_at = excluded.updated_at
-    `);
+    `) : null;
   }
 
   enabled() {
@@ -51,9 +54,12 @@ class TmdbClient {
   async request(endpoint, params = {}, language = this.config.tmdbLanguage) {
     const requestParams = { ...params, language };
     const key = cacheKey(endpoint, language, requestParams);
-    const cached = this.getCache.get(key, nowIso());
+    const cached = this.cacheStore
+      ? this.cacheStore.get(key, nowIso())
+      : this.getCache?.get(key, nowIso());
     if (cached) {
-      return JSON.parse(cached.response_json);
+      this.onCacheHit({ endpoint, language });
+      return this.cacheStore ? cached : JSON.parse(cached.response_json);
     }
 
     let lastError;
@@ -65,18 +71,14 @@ class TmdbClient {
         const response = await this.client.get(endpoint, {
           params: { ...requestParams, api_key: this.config.tmdbApiKey },
         });
+        this.onRequest({ endpoint, language, params: requestParams, status: response.status });
         const now = new Date();
         const expiresAt = new Date(now.getTime() + this.config.tmdbCacheTtlDays * 86400000).toISOString();
-        this.putCache.run(
-          key,
-          endpoint,
-          language,
-          JSON.stringify(response.data),
-          response.status,
-          expiresAt,
-          now.toISOString(),
-          now.toISOString()
-        );
+        if (this.cacheStore) {
+          this.cacheStore.set(key, response.data, { endpoint, language, params: requestParams });
+        } else {
+          this.putCache.run(key, endpoint, language, JSON.stringify(response.data), response.status, expiresAt, now.toISOString(), now.toISOString());
+        }
         return response.data;
       } catch (error) {
         lastError = error;
