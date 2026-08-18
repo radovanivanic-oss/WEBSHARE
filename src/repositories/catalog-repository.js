@@ -78,15 +78,15 @@ function fileSearchClause(token, alias) {
 function seriesFileSearchClause(token) {
   const condition = fileSearchCondition(token, "series_search_file");
   return {
-    sql: `EXISTS (
-      SELECT 1 FROM media series_search_episode
+    sql: `m.id IN (
+      SELECT series_search_episode.tvshow_id FROM media series_search_episode
       JOIN files series_search_file INDEXED BY idx_files_media_active_playable_recent
         ON series_search_file.media_id = series_search_episode.id
-      WHERE series_search_episode.tvshow_id = m.id
+      WHERE series_search_episode.tvshow_id IS NOT NULL
         AND series_search_episode.is_active = 1
         AND series_search_file.is_active = 1
         AND series_search_file.is_playable_video = 1
-        AND ${condition.sql.replaceAll("series_search_file.", "series_search_file.")}
+        AND ${condition.sql}
     )`,
     values: condition.values,
   };
