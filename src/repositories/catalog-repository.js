@@ -295,34 +295,25 @@ function createCatalogRepository(database, config) {
       ),
     ` : "";
     const seriesReleaseCte = seriesReleaseRecent ? `
-      series_episode_release AS (
-        SELECT
-          episode.tvshow_id AS id,
-          MAX(episode.release_date) AS latest_episode_date
-        FROM media episode
-        WHERE episode.tvshow_id IS NOT NULL
-          AND episode.is_active = 1
-          AND episode.release_date IS NOT NULL
-          AND episode.release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-          AND episode.release_date <= date('now')
-        GROUP BY episode.tvshow_id
-      ),
-      series_episode_year AS (
-        SELECT
-          episode.tvshow_id AS id,
-          MAX(episode.year) AS latest_episode_year
-        FROM media episode
-        WHERE episode.tvshow_id IS NOT NULL
-          AND episode.is_active = 1
-          AND episode.year IS NOT NULL
-          AND episode.year <= CAST(strftime('%Y', 'now') AS INTEGER)
-        GROUP BY episode.tvshow_id
-      ),
       series_release_base AS (
         SELECT
           series.id,
-          series_episode_release.latest_episode_date,
-          series_episode_year.latest_episode_year,
+          (
+            SELECT MAX(episode.release_date)
+            FROM media episode
+            WHERE episode.tvshow_id = series.id
+              AND episode.is_active = 1
+              AND episode.release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+              AND episode.release_date <= date('now')
+          ) AS latest_episode_date,
+          (
+            SELECT MAX(episode.year)
+            FROM media episode
+            WHERE episode.tvshow_id = series.id
+              AND episode.is_active = 1
+              AND episode.year IS NOT NULL
+              AND episode.year <= CAST(strftime('%Y', 'now') AS INTEGER)
+          ) AS latest_episode_year,
           CASE
             WHEN series.release_date IS NOT NULL
               AND series.release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
@@ -331,8 +322,6 @@ function createCatalogRepository(database, config) {
           END AS series_release_date,
           series.year AS series_year
         FROM media series
-        LEFT JOIN series_episode_release ON series_episode_release.id = series.id
-        LEFT JOIN series_episode_year ON series_episode_year.id = series.id
         WHERE series.media_type = 'tv' AND series.is_active = 1
       ),
       series_release AS (
@@ -354,7 +343,7 @@ function createCatalogRepository(database, config) {
             ELSE '0000-01-01'
           END AS effective_sort_key,
           CASE
-            WHEN latest_episode_year IS NOT NULL THEN latest_episode_year
+          WHEN latest_episode_year IS NOT NULL THEN latest_episode_year
             WHEN series_year IS NOT NULL AND series_year <= CAST(strftime('%Y', 'now') AS INTEGER) THEN series_year
           END AS effective_release_year
         FROM series_release_base
