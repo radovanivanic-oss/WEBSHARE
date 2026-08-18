@@ -23,6 +23,8 @@
     "media:classify-unclassified:deep-audit": "node scripts/audit-unclassified-classification-v2.js",
     "metadata:enrichment:audit": "node scripts/audit-unclassified-metadata-enrichment.js",
     "media:display-titles:audit": "node scripts/audit-display-titles.js",
+    "media:purge-unclassified:plan": "node scripts/plan-unclassified-purge.js",
+    "media:purge-unclassified:apply": "node scripts/apply-unclassified-purge.js",
     "metadata:enrich": "node scripts/enrich-metadata.js",
     "api:start": "node server/catalog-api.js",
     "publish:github": "node publish-exports.js",
