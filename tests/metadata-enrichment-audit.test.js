@@ -49,7 +49,7 @@ function fixtureDatabase(directory) {
     "unmatched", null, null, null, null, null, null, 1,
   );
   database.prepare(`INSERT INTO media VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-    2, "Movie 2020", "Movie 2020", null, "unknown", 2020, null, null,
+    2, "Mystery Film 2020", "Mystery Film 2020", null, "unknown", 2020, null, null,
     "unmatched", null, null, null, null, null, null, 1,
   );
   database.prepare(`INSERT INTO media VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
@@ -192,4 +192,35 @@ test("control mode evaluates hidden persisted identities without using them as q
   assert.equal(report.control_metrics.wrong_identity, 0);
   assert.equal(report.results[0].expected_identity_hidden, true);
   assert.equal(Object.hasOwn(report.results[0], "external_id"), true);
+});
+
+test("provider audit checkpoints partial results before a budget abort and resumes them", async (t) => {
+  const directory = temporaryDirectory(t);
+  const databasePath = fixtureDatabase(directory);
+  const outputDir = path.join(directory, "partial");
+  let calls = 0;
+  const abortingProvider = {
+    client: { get: async () => ({ status: 200, data: {} }) },
+    search: async () => {
+      calls += 1;
+      if (calls > 1) { const error = new Error("PROVIDER_REQUEST_BUDGET_EXHAUSTED"); error.code = "PROVIDER_REQUEST_BUDGET_EXHAUSTED"; throw error; }
+      return [];
+    },
+  };
+  await assert.rejects(runMetadataEnrichmentAudit({
+    database: databasePath, outputDir, limit: 2, offset: 0, maxProviderRequests: 10,
+    provider: "tmdb", mode: "provider-sample", dryRun: true, maxQueriesPerEntity: 1,
+  }, { provider: abortingProvider, config: { tmdbApiKey: "fixture" } }), /PROVIDER_REQUEST_BUDGET_EXHAUSTED/);
+  const checkpoint = JSON.parse(fs.readFileSync(path.join(outputDir, "checkpoint.json"), "utf8"));
+  assert.equal(checkpoint.processed_total, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(outputDir, "partial-results.json"), "utf8")).results.length, 1);
+  const completingProvider = {
+    client: { get: async () => ({ status: 200, data: {} }) },
+    search: async () => [],
+  };
+  const resumed = await runMetadataEnrichmentAudit({
+    database: databasePath, outputDir, limit: 2, offset: 0, maxProviderRequests: 10,
+    provider: "tmdb", mode: "provider-sample", dryRun: true, maxQueriesPerEntity: 1, resume: true,
+  }, { provider: completingProvider, config: { tmdbApiKey: "fixture" } });
+  assert.equal(resumed.results.length, 2);
 });

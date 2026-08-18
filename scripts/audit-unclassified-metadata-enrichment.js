@@ -90,12 +90,15 @@ function loadResume(outputDir, options, databasePath) {
   }
   const checkpointPath = path.join(outputDir, "checkpoint.json");
   const resultsPath = path.join(outputDir, "enrichment-results.json");
-  if (!fs.existsSync(checkpointPath) || !fs.existsSync(resultsPath)) throw new Error("RESUME_ARTIFACTS_MISSING");
+  const partialResultsPath = path.join(outputDir, "partial-results.json");
+  if (!fs.existsSync(checkpointPath) || (!fs.existsSync(resultsPath) && !fs.existsSync(partialResultsPath))) throw new Error("RESUME_ARTIFACTS_MISSING");
   let checkpoint;
   let prior;
   try {
     checkpoint = JSON.parse(fs.readFileSync(checkpointPath, "utf8"));
-    prior = JSON.parse(fs.readFileSync(resultsPath, "utf8"));
+    prior = fs.existsSync(resultsPath)
+      ? JSON.parse(fs.readFileSync(resultsPath, "utf8"))
+      : { results: JSON.parse(fs.readFileSync(partialResultsPath, "utf8")).results, audit_version: AUDIT_VERSION, match_policy_version: MATCH_POLICY_VERSION, counters: {} };
   } catch {
     throw new Error("RESUME_ARTIFACTS_INVALID");
   }
@@ -110,6 +113,7 @@ function loadResume(outputDir, options, databasePath) {
     previousProcessed: Number(checkpoint.processed_total || checkpoint.processed || 0),
     previousCounters: prior.counters || null,
     inputDigest: checkpoint.input_digest,
+    startOffset: Number(checkpoint.start_offset ?? options.offset),
   };
 }
 
@@ -322,32 +326,61 @@ async function runMetadataEnrichmentAudit(options, dependencies = {}) {
     cache_hits: 0, searched_entities: 0, matched: 0, no_match: 0, ambiguous: 0, retry_later: 0, failed: 0,
   };
   const results = [];
-  if (options.mode === "retrospective") {
-    for (const entity of entities) results.push(retrospectiveEntity(entity));
-  } else {
-    let provider = dependencies.provider || null;
-    if (["control", "provider-sample"].includes(options.mode)) {
-      const config = dependencies.config || getCatalogConfig();
-      if (!config.tmdbApiKey) throw new Error("TMDB_API_KEY_REQUIRED_FOR_PROVIDER_SAMPLE");
-      const cache = dependencies.cache || createMetadataFileCache({ root: options.cacheDir || path.join(outputDir, "cache"), provider: "tmdb", version: MATCH_POLICY_VERSION, ttlDays: 30 });
-      provider = provider || new TmdbClient(config, null, { warn() {} }, {
-        cacheStore: cache,
-        onCacheHit: () => { counters.cache_hits += 1; },
-        minRequestIntervalMs: Math.ceil(60000 / config.tmdbLiveRateLimitPerMinute),
-      });
-      createRequestMeter(provider, options.maxProviderRequests, counters);
+  const stateCounts = (items) => items.reduce((counts, item) => {
+    counts[item.state] = (counts[item.state] || 0) + 1;
+    return counts;
+  }, {});
+  const persistProgress = (items, finishedReason = "running") => {
+    const cumulative = [...resume.previousResults, ...items];
+    atomicJson(path.join(outputDir, "partial-results.json"), { schema_version: 1, audit_version: AUDIT_VERSION, match_policy_version: MATCH_POLICY_VERSION, results: cumulative });
+    atomicJson(path.join(outputDir, "checkpoint.json"), {
+      schema_version: 1,
+      audit_version: AUDIT_VERSION,
+      start_offset: resume.startOffset,
+      input_digest: resume.inputDigest,
+      next_offset: effectiveOffset + items.length,
+      processed: items.length,
+      processed_total: cumulative.length,
+      state_counts: stateCounts(cumulative),
+      provider_requests: counters.provider_requests,
+      sqlite_write_performed: false,
+      finished_reason: finishedReason,
+    });
+  };
+  try {
+    if (options.mode === "retrospective") {
+      for (const entity of entities) results.push(retrospectiveEntity(entity));
+    } else {
+      let provider = dependencies.provider || null;
+      if (["control", "provider-sample"].includes(options.mode)) {
+        const config = dependencies.config || getCatalogConfig();
+        if (!config.tmdbApiKey) throw new Error("TMDB_API_KEY_REQUIRED_FOR_PROVIDER_SAMPLE");
+        const cache = dependencies.cache || createMetadataFileCache({ root: options.cacheDir || path.join(outputDir, "cache"), provider: "tmdb", version: MATCH_POLICY_VERSION, ttlDays: 30 });
+        provider = provider || new TmdbClient(config, null, { warn() {} }, {
+          cacheStore: cache,
+          onCacheHit: () => { counters.cache_hits += 1; },
+          minRequestIntervalMs: Math.ceil(60000 / config.tmdbLiveRateLimitPerMinute),
+        });
+        createRequestMeter(provider, options.maxProviderRequests, counters);
+      }
+      for (const entity of entities) {
+        const result = await matchEntity(entity, provider, options, counters);
+        const control = options.mode === "control" ? {
+          expected_identity_hidden: true,
+          correct_identity: result.state === "MATCHED" && String(result.external_id) === String(entity.media.external_id),
+          correct_type: result.state === "MATCHED" && result.provider_media_type === entity.media.media_type,
+        } : {};
+        results.push({ media_id: entity.media.id, title: entity.media.title, active: Boolean(entity.media.is_active), file_count: entity.files.length, media_type: entity.media.media_type, ...result, ...control });
+        persistProgress(results);
+        if (counters.provider_requests >= options.maxProviderRequests && ["control", "provider-sample"].includes(options.mode)) break;
+      }
     }
-    for (const entity of entities) {
-      const result = await matchEntity(entity, provider, options, counters);
-      const control = options.mode === "control" ? {
-        expected_identity_hidden: true,
-        correct_identity: result.state === "MATCHED" && String(result.external_id) === String(entity.media.external_id),
-        correct_type: result.state === "MATCHED" && result.provider_media_type === entity.media.media_type,
-      } : {};
-      results.push({ media_id: entity.media.id, title: entity.media.title, active: Boolean(entity.media.is_active), file_count: entity.files.length, media_type: entity.media.media_type, ...result, ...control });
-      if (counters.provider_requests >= options.maxProviderRequests && ["control", "provider-sample"].includes(options.mode)) break;
-    }
+  } catch (error) {
+    persistProgress(results, "aborted");
+    database.close();
+    throw error;
   }
+  if (options.mode === "retrospective") persistProgress(results);
   database.close();
   const allResults = [...resume.previousResults, ...results];
   const byState = {};
@@ -413,7 +446,7 @@ async function runMetadataEnrichmentAudit(options, dependencies = {}) {
   atomicJson(path.join(outputDir, "ambiguous-samples.json"), allResults.filter((result) => result.state === "AMBIGUOUS").slice(0, 200));
   atomicJson(path.join(outputDir, "migration-candidates.json"), { schema_version: 1, policy_version: MATCH_POLICY_VERSION, sqlite_write_performed: false, candidate_count: migrationCandidates.length, plan_sha256: digest(migrationCandidates), candidates: migrationCandidates });
   atomicJson(path.join(outputDir, "enrichment-results.json"), report);
-  atomicJson(path.join(outputDir, "checkpoint.json"), { schema_version: 1, audit_version: AUDIT_VERSION, start_offset: options.resume ? JSON.parse(fs.readFileSync(path.join(outputDir, "checkpoint.json"), "utf8")).start_offset ?? options.offset : options.offset, input_digest: resume.inputDigest, next_offset: effectiveOffset + results.length, processed: results.length, processed_total: allResults.length, state_counts: byState, provider_requests: counters.provider_requests, sqlite_write_performed: false, finished_reason: results.length < options.limit ? "completed" : "limit_reached" });
+  atomicJson(path.join(outputDir, "checkpoint.json"), { schema_version: 1, audit_version: AUDIT_VERSION, start_offset: resume.startOffset, input_digest: resume.inputDigest, next_offset: effectiveOffset + results.length, processed: results.length, processed_total: allResults.length, state_counts: byState, provider_requests: counters.provider_requests, sqlite_write_performed: false, finished_reason: results.length < options.limit ? "completed" : "limit_reached" });
   atomicJson(path.join(outputDir, "audit.manifest.json"), { schema_version: 1, audit_version: AUDIT_VERSION, match_policy_version: MATCH_POLICY_VERSION, deterministic_sha256: report.deterministic_sha256, provider_requests: counters.provider_requests, sqlite_write_performed: false, database_read_only: true, results: allResults.length, resumable: true });
   fs.writeFileSync(path.join(outputDir, "audit.log"), "metadata enrichment audit; SQLite writes: 0; credentials persisted: 0\n", { encoding: "utf8", mode: 0o600 });
   return report;
