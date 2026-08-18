@@ -9,6 +9,7 @@ const { importCatalog } = require("../scripts/import-catalog-jsonl");
 const { createCatalogApi } = require("../server/catalog-api");
 const { getCatalogConfig } = require("../src/config/catalog-config");
 const { openCatalogDatabase } = require("../src/db/catalog-db");
+const { rebuildMediaFts } = require("../src/repositories/media-repository");
 
 const fixtureItems = [
   { ident: "inception-fixture", name: "Inception 2010 1080p AV1 10Bit DKong.mkv", size: "4000", type: "mkv", category: "video" },
@@ -53,7 +54,7 @@ async function createFixture(t) {
     database.close();
     fs.rmSync(directory, { recursive: true, force: true });
   });
-  return { app, inceptionId: inception.id, accentId: accent.id, seriesId: series.id };
+  return { app, database, inceptionId: inception.id, accentId: accent.id, seriesId: series.id };
 }
 
 async function search(app, query, params = {}) {
@@ -101,6 +102,21 @@ test("category-scoped series search returns canonical TV entities from episode f
   assert.deepEqual(body.data.map((row) => row.id), [seriesId]);
   assert.equal(body.data[0].media_type, "tv");
   assert.equal(body.data[0].category, "series");
+});
+
+test("category-scoped series search preserves native Hangul and English alias search", async (t) => {
+  const { app, seriesId, database } = await createFixture(t);
+  database.prepare("UPDATE media SET title = ?, original_title = ?, metadata_status = 'matched', metadata_confidence = 0.98 WHERE id = ?")
+    .run("결혼의 완성", "결혼의 완성", seriesId);
+  database.prepare("INSERT INTO media_aliases(media_id, alias, normalized_alias, language, source, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(seriesId, "The Completion of Marriage", "the completion of marriage", "en", "tmdb", new Date().toISOString());
+  rebuildMediaFts(database, seriesId);
+  const native = await app.inject({ method: "GET", url: "/api/search/series?q=" + encodeURIComponent("결혼의 완성") });
+  const english = await app.inject({ method: "GET", url: "/api/search/series?q=The%20Completion%20of%20Marriage" });
+  assert.equal(native.statusCode, 200);
+  assert.equal(english.statusCode, 200);
+  assert.deepEqual(native.json().data.map((row) => row.id), [seriesId]);
+  assert.deepEqual(english.json().data.map((row) => row.id), [seriesId]);
 });
 
 test("catalog search is parameterized and fails safely for empty results", async (t) => {

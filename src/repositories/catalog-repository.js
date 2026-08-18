@@ -35,7 +35,12 @@ function normalizeSearchTokens(value) {
   return rawTokens
     .map((raw) => ({
       raw,
-      folded: raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase(),
+      // NFKD is correct for Latin diacritics but decomposes Hangul into Jamo,
+      // which no longer matches the stored FTS title. Preserve non-Latin
+      // scripts in their NFC/NFKC form and fold only Latin text.
+      folded: /\p{Script=Latin}/u.test(raw)
+        ? raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+        : raw.toLowerCase(),
     }))
     .filter((token) => token.folded.length > 0);
 }
