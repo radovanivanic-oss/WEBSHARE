@@ -6,6 +6,7 @@ const path = require("node:path");
 const { createApiClient, fetchSearchPage, loginAndGetWst, normalizeFile, WebshareSession } = require("../main");
 const { openCatalogDatabase } = require("../src/db/catalog-db");
 const { acquireCrawlerLock, inspectLock } = require("../lib/crawler/lock");
+const { filterPurgedDiscoveryItems, readAndValidatePurgedSidecar } = require("../lib/daily-candidate-provenance");
 const {
   DEFAULT_POLICY,
   B46_DEFAULT_POLICY,
@@ -55,11 +56,11 @@ function parseArguments(argv) {
   const queriesValue = argument(argv, "--queries");
   const queries = queriesValue ? queriesValue.split(",").map((value) => value.trim()).filter(Boolean) : [...B46_QUERY_PORTFOLIO];
   const batchSize = argument(argv, "--batch-size", "50");
-  return { database, outputDir, statePath, policy, mode, discoveryMode, queries, batchSize: positive(batchSize, "batch-size", 50), recentQuery: argument(argv, "--recent-query", ""), captureBaseline: argv.includes("--capture-baseline"), apply: argv.includes("--apply"), verifyStale: argv.includes("--verify-stale"), advanceState: argv.includes("--advance-state"), publicationVerified: argv.includes("--publication-verified"), backupPath: argument(argv, "--backup-path"), expectedPlanSha256: argument(argv, "--expected-plan-sha256") };
+  return { database, outputDir, statePath, policy, mode, discoveryMode, queries, batchSize: positive(batchSize, "batch-size", 50), recentQuery: argument(argv, "--recent-query", ""), purgedIdentSidecar: argument(argv, "--purged-ident-sidecar"), captureBaseline: argv.includes("--capture-baseline"), apply: argv.includes("--apply"), verifyStale: argv.includes("--verify-stale"), advanceState: argv.includes("--advance-state"), publicationVerified: argv.includes("--publication-verified"), backupPath: argument(argv, "--backup-path"), expectedPlanSha256: argument(argv, "--expected-plan-sha256") };
 }
 
 function usage() {
-  return "node scripts/run-daily-maintenance.js --mode daily-best-effort|weekly-stale --database FILE --output-dir DIR [--queries a,b --max-pages-per-query N] [--apply --expected-plan-sha256 HASH --backup-path FILE --advance-state --publication-verified]";
+  return "node scripts/run-daily-maintenance.js --mode daily-best-effort|weekly-stale --database FILE --output-dir DIR [--queries a,b --max-pages-per-query N] [--purged-ident-sidecar FILE] [--apply --expected-plan-sha256 HASH --backup-path FILE --advance-state --publication-verified]";
 }
 
 async function createLiveDependencies() {
@@ -110,6 +111,12 @@ async function main(options = parseArguments(process.argv.slice(2))) {
         policy: options.policy,
       })
       : await discoverRecent({ prefixes: options.policy.prefixes, state, fetchPage: deps.fetchPage, normalize: normalizeFile, policy: options.policy });
+    let provenanceFilter = null;
+    if (options.purgedIdentSidecar && options.mode === "daily-best-effort") {
+      const sidecar = readAndValidatePurgedSidecar(options.purgedIdentSidecar);
+      provenanceFilter = filterPurgedDiscoveryItems(discovery.items, sidecar);
+      discovery.items = provenanceFilter.items;
+    }
     if (discovery.items.length > options.policy.maxDiscoveredItems) discovery.complete = false;
     let verificationOutcomes = [];
     if (options.mode === "weekly-stale" && staleCandidates.length > 0) {
@@ -143,7 +150,7 @@ async function main(options = parseArguments(process.argv.slice(2))) {
     if (options.expectedPlanSha256 && options.expectedPlanSha256 !== plan.plan_sha256) throw new Error("DAILY_EXPECTED_PLAN_SHA256_MISMATCH");
     const planPath = path.join(options.outputDir, "daily-plan.json");
     writeJsonAtomic(planPath, plan);
-    const report = { schema_version: 1, status: plan.status, operation: options.mode, coverage_declaration: options.mode === "daily-best-effort" ? "BEST_EFFORT" : "NOT_APPLICABLE", plan_sha256: plan.plan_sha256, discovery: { mode: discovery.mode || null, coverage_declaration: discovery.coverage_declaration || null, complete: plan.discovery.complete, requests: plan.discovery.requests, raw_records: discovery.raw_records || null, unique_idents: discovery.unique_idents || null, nonempty_queries: discovery.nonempty_queries || null, empty_queries: discovery.empty_queries || null, queries: discovery.queries || null, page_reports: plan.discovery.page_reports, stop_reason: plan.discovery.stop_reason, observed_items: plan.discovery.observed_items }, counters: plan.counters, blocked_reasons: plan.blocked_reasons, stale_candidates: staleCandidates.length, verification_outcomes: verificationOutcomes.length, safety: plan.safety, plan_path: planPath };
+    const report = { schema_version: 1, status: plan.status, operation: options.mode, coverage_declaration: options.mode === "daily-best-effort" ? "BEST_EFFORT" : "NOT_APPLICABLE", plan_sha256: plan.plan_sha256, provenance_filter: provenanceFilter ? { policy: "B39_PURGED_IDENT_SET", sidecar: options.purgedIdentSidecar, filtered_count: provenanceFilter.filtered_count } : null, discovery: { mode: discovery.mode || null, coverage_declaration: discovery.coverage_declaration || null, complete: plan.discovery.complete, requests: plan.discovery.requests, raw_records: discovery.raw_records || null, unique_idents: discovery.unique_idents || null, nonempty_queries: discovery.nonempty_queries || null, empty_queries: discovery.empty_queries || null, queries: discovery.queries || null, page_reports: plan.discovery.page_reports, stop_reason: plan.discovery.stop_reason, observed_items: plan.discovery.observed_items }, counters: plan.counters, blocked_reasons: plan.blocked_reasons, stale_candidates: staleCandidates.length, verification_outcomes: verificationOutcomes.length, safety: plan.safety, plan_path: planPath };
     report.discovery.state = discovery.state || state.discovery_state || DISCOVERY_STATES.UNINITIALIZED;
     report.discovery.snapshot = discovery.snapshot ? { unique_count: discovery.snapshot.unique_count, ordered_idents_sha256: discovery.snapshot.ordered_idents_sha256, idents_sha256: discovery.snapshot.idents_sha256 } : null;
     if (options.captureBaseline) {

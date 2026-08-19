@@ -7,7 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const Database = require("better-sqlite3");
-const { buildPurgedSidecar, readAndValidatePurgedSidecar, digestIdents } = require("../lib/daily-candidate-provenance");
+const { buildPurgedSidecar, readAndValidatePurgedSidecar, digestIdents, filterPurgedDiscoveryItems } = require("../lib/daily-candidate-provenance");
 
 function db(file, idents) {
   const d = new Database(file);
@@ -35,4 +35,12 @@ test("B39 purged sidecar is sorted, digest protected and does not mutate databas
   corrupt.idents[0] = "tampered";
   fs.writeFileSync(sidecarPath, JSON.stringify(corrupt));
   assert.throws(() => readAndValidatePurgedSidecar(sidecarPath), /DIGEST_MISMATCH/);
+});
+
+test("opt-in provenance filter removes only B39 tombstoned discoveries", () => {
+  const sidecar = { schema_version: 1, kind: "B39_PURGED_IDENT_SET", idents: ["purged"], idents_sha256: digestIdents(["purged"]) };
+  const result = filterPurgedDiscoveryItems([{ ident: "purged" }, { ident: "unseen" }, { ident: "purged" }], sidecar);
+  assert.deepEqual(result.items, [{ ident: "unseen" }]);
+  assert.equal(result.filtered_count, 2);
+  assert.deepEqual(result.filtered.map((item) => item.ident), ["purged", "purged"]);
 });
