@@ -79,6 +79,32 @@ class PublicCatalogTests(unittest.TestCase):
         self.assertEqual(len(flattened), len(set(flattened)))
         self.assertEqual(client.media(category="movies", page=3, limit=3, sort="title", order="asc")["pagination"]["has_more"], False)
 
+    def test_precomputed_release_listing_loads_only_the_requested_chunk(self):
+        client = self.client()
+        rows = [{"id": i, "category": "movies", "title": "Title {:02d}".format(i), "display_title": "Title {:02d}".format(i), "year": 2026, "release_date": "2026-07-{:02d}".format(i), "available_files_count": 1} for i in range(1, 8)]
+        client._manifest["listings"] = [{
+            "category": "movies", "sort": "release_date_desc", "order": "desc", "chunk_size": 3,
+            "record_count": len(rows), "shards": [{"sha256": "l0", "range": 0}, {"sha256": "l1", "range": 1}, {"sha256": "l2", "range": 2}],
+        }]
+        client._objects["l0"] = rows[0:3]
+        client._objects["l1"] = rows[3:6]
+        client._objects["l2"] = rows[6:7]
+        result = client.media(category="movies", sort="release_date_desc", page=2, limit=3)
+        self.assertEqual([row["id"] for row in result["data"]], [4, 5, 6])
+        self.assertEqual(result["pagination"], {"page": 2, "limit": 3, "total": 7, "pages": 3, "has_more": True})
+
+    def test_generation_activation_discards_old_in_memory_listing_records(self):
+        client = self.client()
+        client._manifest["generation_id"] = "old"
+        client._records["movies"] = [{"id": 1}]
+        client._search_indexes["movies"] = {"old": {1}}
+        client._objects["old-object"] = []
+        new_manifest = dict(client._manifest, generation_id="new", unclassified_exported=0)
+        client._activate_manifest({"generation_id": "new"}, new_manifest, client.pointer_url, client._manifest_url)
+        self.assertEqual(client._records, {})
+        self.assertEqual(client._search_indexes, {})
+        self.assertEqual(client._objects, {})
+
     def test_corrupt_cached_object_fails_closed(self):
         client = self.client()
         client._objects = {}

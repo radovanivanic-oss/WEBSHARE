@@ -584,6 +584,40 @@ class KodiSearchTests(unittest.TestCase):
         self.assertFalse(kwargs.get("isFolder"))
         self.assertEqual(args[2].properties["IsPlayable"], "true")
 
+    def test_static_movie_detail_renders_provider_genre_objects_and_all_variants(self):
+        client = mock.Mock()
+        client.detail.return_value = {
+            "id": 4576,
+            "title": "Enola Holmes 3",
+            "display_title": "Enola Holmes 3",
+            "media_type": "movie",
+            "year": 2026,
+            "overview": None,
+            "genres": [{"id": 9648, "name": "Mystery"}, {"id": 35, "name": "Comedy"}],
+        }
+        client.metadata.return_value = {
+            "genres": [{"id": 9648, "name": "Mystery"}, {"id": 35, "name": "Comedy"}],
+        }
+        client.files.return_value = {
+            "data": [
+                {"ident": "enola-{}".format(index), "name": "Enola Holmes 3 {}.mkv".format(index), "size": 1000, "extension": "mkv", "resolution": "1080p"}
+                for index in range(7)
+            ],
+            "pagination": {"pages": 1},
+        }
+        captured = []
+        with mock.patch.object(addon, "catalog_api", return_value=client):
+            with mock.patch.object(addon.xbmcplugin, "addDirectoryItem", side_effect=lambda *args, **kwargs: captured.append((args, kwargs))):
+                with mock.patch.object(addon.xbmcplugin, "endOfDirectory"):
+                    addon.api_media_detail({"media_id": "4576"})
+        self.assertEqual(len(captured), 7)
+        self.assertTrue(all(not kwargs.get("isFolder") for _, kwargs in captured))
+        self.assertEqual(
+            [dict(parse_qsl(urlsplit(args[1]).query))["ident"] for args, _ in captured],
+            ["enola-{}".format(index) for index in range(7)],
+        )
+        self.assertEqual(captured[0][0][2].info[1]["genre"], "Mystery / Comedy")
+
     def test_movie_metadata_has_safe_description_and_art_fallback(self):
         row = {
             "media_type": "movie", "title": "Fixture Movie", "name": "Fixture Movie.mkv",

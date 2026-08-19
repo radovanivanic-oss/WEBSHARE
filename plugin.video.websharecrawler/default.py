@@ -1311,7 +1311,7 @@ def add_api_file(file_row, detail, meta):
         "language": "/".join(languages) if languages else "unknown",
         "audio_type": "dubbed" if file_row.get("has_dubbing") else "unknown",
         "subtitle_type": "subs" if file_row.get("has_subtitles") else "unknown",
-        "genre": ", ".join(meta.get("genres") or []),
+        "genre": ", ".join(safe_text_list(meta.get("genres"))),
         "series_title": detail.get("title") if detail.get("media_type") == "episode" else None,
         "season": detail.get("season_number"),
         "episode": detail.get("episode_number"),

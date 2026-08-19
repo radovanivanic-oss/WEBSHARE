@@ -16,7 +16,7 @@ from resources.lib.catalog_api import CatalogApiError
 from resources.lib.paths import profile_path
 
 
-USER_AGENT = "Webshare Atlas Public Catalog/0.8.18"
+USER_AGENT = "Webshare Atlas Public Catalog/0.8.19"
 ROOT_SCHEMA = "webshare-atlas-public-catalog/v1"
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 
@@ -101,6 +101,11 @@ class PublicCatalogClient(object):
     def _activate_manifest(self, pointer, manifest, pointer_url, manifest_url, persist_active=False):
         if manifest.get("schema") != ROOT_SCHEMA or manifest.get("schema_version") != 1 or manifest.get("unclassified_exported") != 0:
             raise PublicCatalogError("Verejný katalóg má neplatnú schému")
+        previous_generation = self._manifest.get("generation_id") if self._manifest else None
+        if previous_generation and previous_generation != manifest.get("generation_id"):
+            self._records = {}
+            self._search_indexes = {}
+            self._objects = {}
         if pointer.get("manifest_sha256") and _sha256(json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) != pointer.get("manifest_sha256"):
             # GitHub raw files normally preserve the builder's trailing newline; accept the
             # canonical JSON hash only when a server-side pointer does not include a hash.
@@ -221,6 +226,33 @@ class PublicCatalogClient(object):
         self._search_indexes[category] = index
         return records
 
+    def _listing_page(self, category, sort, page, limit):
+        listing = next(
+            (row for row in self._ensure_manifest().get("listings", [])
+             if row.get("category") == category and row.get("sort") == sort and row.get("order", "desc") == "desc"),
+            None,
+        )
+        if not listing:
+            return None
+        chunk_size = max(1, int(listing.get("chunk_size") or 5000))
+        total = int(listing.get("record_count") or 0)
+        start = (page - 1) * limit
+        end = min(total, start + limit)
+        if start >= total:
+            rows = []
+        else:
+            first_chunk = start // chunk_size
+            last_chunk = (end - 1) // chunk_size
+            loaded = []
+            for chunk_index in range(first_chunk, last_chunk + 1):
+                shards = listing.get("shards") or []
+                shard = next((item for item in shards if int(item.get("range", -1)) == chunk_index), None)
+                if not shard:
+                    raise PublicCatalogError("Verejný katalóg nemá úplný listing")
+                loaded.extend(self._object(shard))
+            rows = loaded[start - first_chunk * chunk_size:end - first_chunk * chunk_size]
+        return {"data": rows, "pagination": {"page": page, "limit": limit, "total": total, "pages": (total + limit - 1) // limit, "has_more": end < total}}
+
     def _matches(self, row, query):
         query_tokens = _tokens(query)
         haystack = []
@@ -233,10 +265,17 @@ class PublicCatalogClient(object):
     def media(self, **params):
         category = params.get("category")
         categories = [category] if category else [row.get("category") for row in self._ensure_manifest().get("categories", [])]
+        query = params.get("query") or params.get("q")
+        sort = params.get("sort") or "recent"
+        page = max(1, int(params.get("page") or 1)); limit = max(1, min(100, int(params.get("limit") or 50)))
+        has_filters = bool(query or params.get("year") or params.get("genre") or params.get("language") or params.get("quality"))
+        if len(categories) == 1 and not has_filters:
+            listing_page = self._listing_page(categories[0], sort, page, limit)
+            if listing_page is not None:
+                return listing_page
         rows = []
         for category_name in categories:
             rows.extend(self._category_records(category_name))
-        query = params.get("query") or params.get("q")
         if query:
             query_tokens = _tokens(query)
             candidate_ids = None
@@ -251,7 +290,6 @@ class PublicCatalogClient(object):
         if params.get("genre"):
             wanted = str(params["genre"]).casefold()
             rows = [row for row in rows if any(str(g.get("name") if isinstance(g, dict) else g).casefold() == wanted for g in row.get("genres") or [])]
-        sort = params.get("sort") or "recent"
         reverse = str(params.get("order", "desc")).lower() != "asc"
         if sort in ("release_date_desc", "series_release_date_desc"):
             today = date.today().isoformat()
@@ -263,7 +301,6 @@ class PublicCatalogClient(object):
             rows.sort(key=lambda row: (row.get("rating") or 0, row.get("id") or 0), reverse=reverse)
         else:
             rows.sort(key=lambda row: (row.get("updated_at") or "", row.get("id") or 0), reverse=True)
-        page = max(1, int(params.get("page") or 1)); limit = max(1, min(100, int(params.get("limit") or 50)))
         start = (page - 1) * limit
         page_rows = rows[start:start + limit]
         return {"data": page_rows, "pagination": {"page": page, "limit": limit, "total": len(rows), "pages": (len(rows) + limit - 1) // limit, "has_more": start + limit < len(rows)}}
