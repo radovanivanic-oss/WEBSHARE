@@ -518,8 +518,8 @@ class KodiSearchTests(unittest.TestCase):
 
         self.assertEqual(client.search.call_args.args, ("Inception 2010",))
         self.assertEqual(len(added), 1)
-        self.assertEqual(self.route_params(added[0]), {"action": "api_media_detail", "media_id": "272158"})
-        self.assertTrue(added[0][1].get("isFolder"))
+        self.assertEqual(self.route_params(added[0]), {"action": "api_media_select", "media_id": "272158"})
+        self.assertFalse(added[0][1].get("isFolder"))
         self.assertEqual(ended[-1][1], {"succeeded": True})
 
     def test_api_search_queries_and_unicode_are_forwarded(self):
@@ -676,6 +676,83 @@ class KodiSearchTests(unittest.TestCase):
         )
         self.assertEqual(captured[0][0][2].info[1]["genre"], "Mystery / Comedy")
         self.assertEqual(captured[0][0][2].info[1]["plot"], "Český popis Enoly Holmesovej 3.")
+
+    def test_movie_selection_uses_native_details_aware_dialog_and_preserves_ident(self):
+        client = mock.Mock()
+        client.detail.return_value = {
+            "id": 4576, "title": "Enola Holmes 3", "display_title": "Enola Holmes 3",
+            "media_type": "movie", "year": 2026, "overview": "Popis", "poster_url": "poster", "backdrop_url": "backdrop",
+        }
+        client.files.return_value = {
+            "data": [
+                {"id": 1, "ident": "enola-low", "name": "low.mkv", "size": 1, "resolution": "720p"},
+                {"id": 2, "ident": "enola-high", "name": "high.mkv", "size": 2, "resolution": "1080p", "video_codec": "HEVC"},
+            ],
+            "pagination": {"pages": 1},
+        }
+        with mock.patch.object(addon, "catalog_api", return_value=client), \
+             mock.patch.object(addon.xbmcgui.Dialog, "select", return_value=0, create=True) as select, \
+             mock.patch.object(addon, "play_video") as play:
+            addon.api_media_select({"media_id": "4576"})
+        self.assertEqual(select.call_args.args[0], "Enola Holmes 3")
+        self.assertEqual(len(select.call_args.args[1]), 2)
+        self.assertIn("1080p", select.call_args.args[1][0].label)
+        self.assertIn("720p", select.call_args.args[1][1].label)
+        self.assertEqual(select.call_args.kwargs, {"useDetails": True})
+        self.assertEqual(play.call_args.args[0]["ident"], "enola-high")
+        self.assertEqual(select.call_args.args[1][1].info[1]["plot"], "Popis")
+        self.assertEqual(select.call_args.args[1][1].art["fanart"], "backdrop")
+
+    def test_enola_movie_selection_presents_all_seven_sources(self):
+        client = mock.Mock()
+        client.detail.return_value = {"id": 4576, "title": "Enola Holmes 3", "media_type": "movie", "year": 2026}
+        client.files.return_value = {
+            "data": [
+                {"id": index, "ident": "enola-{}".format(index), "name": "Enola {}.mkv".format(index), "size": index, "resolution": "1080p"}
+                for index in range(1, 8)
+            ],
+            "pagination": {"pages": 1},
+        }
+        with mock.patch.object(addon, "catalog_api", return_value=client), \
+             mock.patch.object(addon.xbmcgui.Dialog, "select", return_value=6, create=True) as select, \
+             mock.patch.object(addon, "play_video") as play:
+            addon.api_media_select({"media_id": "4576"})
+        self.assertEqual(len(select.call_args.args[1]), 7)
+        self.assertEqual(play.call_args.args[0]["ident"], "enola-1")
+
+    def test_canceling_movie_source_selection_does_not_play(self):
+        client = mock.Mock()
+        client.detail.return_value = {"id": 272158, "title": "Počiatok", "media_type": "movie", "year": 2010}
+        client.files.return_value = {
+            "data": [
+                {"id": 1, "ident": "inception-1", "name": "Inception.mkv", "size": 1},
+                {"id": 2, "ident": "inception-2", "name": "Inception 720p.mkv", "size": 1, "resolution": "720p"},
+            ],
+            "pagination": {"pages": 1},
+        }
+        with mock.patch.object(addon, "catalog_api", return_value=client), \
+             mock.patch.object(addon.xbmcgui.Dialog, "select", return_value=-1, create=True), \
+             mock.patch.object(addon, "play_video") as play, \
+             mock.patch.object(addon.xbmcplugin, "setResolvedUrl") as resolved:
+            addon.api_media_select({"media_id": "272158"})
+        play.assert_not_called()
+        resolved.assert_called_once()
+
+    def test_episode_selection_uses_the_same_source_dialog(self):
+        client = mock.Mock()
+        client.detail.return_value = {"id": 82913, "title": "The Husband", "media_type": "episode", "year": 2026, "season_number": 1, "episode_number": 1}
+        client.files.return_value = {
+            "data": [
+                {"id": 1, "ident": "episode-1", "name": "episode.mkv", "size": 1, "resolution": "1080p"},
+                {"id": 2, "ident": "episode-2", "name": "episode-low.mkv", "size": 1, "resolution": "720p"},
+            ],
+            "pagination": {"pages": 1},
+        }
+        with mock.patch.object(addon, "catalog_api", return_value=client), \
+             mock.patch.object(addon.xbmcgui.Dialog, "select", return_value=0, create=True), \
+             mock.patch.object(addon, "play_video") as play:
+            addon.api_media_select({"media_id": "82913"})
+        self.assertEqual(play.call_args.args[0]["ident"], "episode-1")
 
     def test_static_listing_hydrates_missing_overview_for_root_list_item(self):
         client = mock.Mock()

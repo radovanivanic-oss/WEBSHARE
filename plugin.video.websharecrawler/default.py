@@ -1085,12 +1085,117 @@ def add_api_media(media):
             "fanart": media.get("backdrop_url") or fallback_art(),
         }
     )
+    direct_source_selection = media.get("media_type") in ("movie", "episode", "video")
+    if direct_source_selection:
+        item.setProperty("IsPlayable", "true")
     xbmcplugin.addDirectoryItem(
         HANDLE,
-        addon_url({"action": "api_media_detail", "media_id": media.get("id")}),
+        addon_url({"action": "api_media_select" if direct_source_selection else "api_media_detail", "media_id": media.get("id")}),
         item,
-        isFolder=True,
+        isFolder=not direct_source_selection,
     )
+
+
+def load_all_api_files(media_id):
+    """Load the bounded file set needed by the native source selector."""
+    files = []
+    page = 1
+    while True:
+        response = catalog_api().files(media_id, page=page, limit=page_size())
+        if not isinstance(response, dict):
+            raise CatalogApiError("Katalógové API vrátilo neplatné súbory")
+        page_files = response.get("data", []) or []
+        if not isinstance(page_files, list) or any(not isinstance(file_row, dict) for file_row in page_files):
+            raise CatalogApiError("Katalógové API vrátilo neplatné súbory")
+        files.extend(page_files)
+        pagination = response.get("pagination") or {}
+        pages = int(pagination.get("pages") or page)
+        if page >= pages or not page_files:
+            break
+        page += 1
+    return sorted(files, key=variant_sort_key)
+
+
+def api_file_list_item(file_row, detail, meta):
+    """Build a reference-style source ListItem without adding a directory row."""
+    languages = file_row.get("languages") or []
+    quality = file_row.get("resolution") or "unknown"
+    row = {
+        "ident": file_row.get("ident") or "",
+        "title": detail.get("title") or file_row.get("name") or "",
+        "catalog_title": detail.get("title") or "",
+        "name": file_row.get("name") or "",
+        "size": int(file_row.get("size") or 0),
+        "extension": file_row.get("extension") or "",
+        "mime": "",
+        "media_type": detail.get("media_type") or "movie",
+        "year": detail.get("year"),
+        "quality": quality,
+        "language": "/".join(languages) if languages else "unknown",
+        "audio_type": "dubbed" if file_row.get("has_dubbing") else "unknown",
+        "subtitle_type": "subs" if file_row.get("has_subtitles") else "unknown",
+        "genre": ", ".join(safe_text_list(meta.get("genres"))),
+        "series_title": detail.get("title") if detail.get("media_type") == "episode" else None,
+        "season": detail.get("season_number"),
+        "episode": detail.get("episode_number"),
+        "source": file_row.get("source") or "webshare",
+        "url": "webshare://{}".format(file_row.get("ident") or ""),
+    }
+    title = meta.get("title") or row["title"]
+    item = xbmcgui.ListItem(label=api_file_label(file_row), label2=row["name"] or human_file_size(row["size"]))
+    item.setProperty("IsPlayable", "true")
+    set_video_metadata(item, row, meta, title)
+    item.setProperty("VideoCodec", str(file_row.get("video_codec") or "").lower())
+    item.setProperty("VideoResolution", resolution_from_quality(quality))
+    item.setProperty("AudioLanguage", "/".join(languages))
+    item.setProperty("WebshareOriginalName", row["name"])
+    item.setProperty("FileSize", human_file_size(row["size"]))
+    return item, row
+
+
+def api_media_select(params):
+    """Show sources in Kodi's native details-aware selector, then play ident."""
+    media_id = params.get("media_id")
+    try:
+        detail = catalog_api().detail(media_id) or {}
+        if not isinstance(detail, dict):
+            raise CatalogApiError("Katalógové API vrátilo neplatný detail média")
+        files = load_all_api_files(media_id)
+        live_metadata = {}
+        try:
+            live_metadata = catalog_api().metadata(media_id) or {}
+        except CatalogApiError:
+            live_metadata = {}
+        meta = api_detail_meta(detail, live_metadata)
+    except CatalogApiError as exc:
+        notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        return
+
+    if not files:
+        notify("Pre toto médium nie sú dostupné žiadne zdroje", xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        return
+
+    items = []
+    rows = []
+    for file_row in files:
+        item, row = api_file_list_item(file_row, detail, meta)
+        items.append(item)
+        rows.append(row)
+    heading = meta.get("title") or detail.get("display_title") or detail.get("title") or "Webshare Atlas"
+    if len(rows) == 1:
+        play_video({"ident": rows[0]["ident"], "title": heading})
+        return
+    try:
+        selected = xbmcgui.Dialog().select(heading, items, useDetails=True)
+    except TypeError:
+        selected = xbmcgui.Dialog().select(heading, items)
+    if selected is None or selected < 0 or selected >= len(rows):
+        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        return
+    selected_row = rows[selected]
+    play_video({"ident": selected_row["ident"], "title": heading})
 
 
 def api_media_detail(params):
@@ -1402,39 +1507,8 @@ def api_file_label(file_row):
 
 
 def add_api_file(file_row, detail, meta):
-    languages = file_row.get("languages") or []
-    quality = file_row.get("resolution") or "unknown"
-    row = {
-        "ident": file_row.get("ident") or "",
-        "title": detail.get("title") or file_row.get("name") or "",
-        "catalog_title": detail.get("title") or "",
-        "name": file_row.get("name") or "",
-        "size": int(file_row.get("size") or 0),
-        "extension": file_row.get("extension") or "",
-        "mime": "",
-        "media_type": detail.get("media_type") or "movie",
-        "year": detail.get("year"),
-        "quality": quality,
-        "language": "/".join(languages) if languages else "unknown",
-        "audio_type": "dubbed" if file_row.get("has_dubbing") else "unknown",
-        "subtitle_type": "subs" if file_row.get("has_subtitles") else "unknown",
-        "genre": ", ".join(safe_text_list(meta.get("genres"))),
-        "series_title": detail.get("title") if detail.get("media_type") == "episode" else None,
-        "season": detail.get("season_number"),
-        "episode": detail.get("episode_number"),
-        "source": file_row.get("source") or "webshare",
-        "url": "webshare://{}".format(file_row.get("ident") or ""),
-    }
-    title = row["title"]
-    size_label = human_file_size(row["size"])
-    item = xbmcgui.ListItem(label=api_file_label(file_row), label2=row["name"] or size_label)
-    item.setProperty("IsPlayable", "true")
-    set_video_metadata(item, row, meta, title)
-    item.setProperty("VideoCodec", str(file_row.get("video_codec") or "").lower())
-    item.setProperty("VideoResolution", resolution_from_quality(quality))
-    item.setProperty("AudioLanguage", "/".join(languages))
-    item.setProperty("WebshareOriginalName", row["name"])
-    item.setProperty("FileSize", size_label)
+    item, row = api_file_list_item(file_row, detail, meta)
+    title = meta.get("title") or row["title"]
     item.addContextMenuItems(
         [
             (
@@ -2177,6 +2251,7 @@ def router():
         "api_languages": lambda: api_languages_menu(params),
         "api_media": lambda: api_media(params),
         "api_media_detail": lambda: api_media_detail(params),
+        "api_media_select": lambda: api_media_select(params),
         "api_media_season": lambda: api_media_season(params),
         "show_file_name": lambda: show_file_name(params),
         "search_ident": search_ident,
