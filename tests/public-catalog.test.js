@@ -72,6 +72,9 @@ test("builds and validates a deterministic public media/series/files read model"
   assert.equal(movies[0].available_files_count, 1);
   assert.equal(movies[0].variant_count, 1);
   assert.equal(Object.hasOwn(movies[0], "overview"), false);
+  const listingShard = manifest.listings.find(x => x.category === "movies").shards[0].sha256;
+  const listing = JSON.parse(require("zlib").gunzipSync(fs.readFileSync(path.join(result.root, "generations", "fixture-1", "objects", listingShard + ".json.gz"))).toString("utf8"));
+  assert.equal(Object.hasOwn(listing[0], "overview"), false);
   const detailShard = manifest.details.categories.find(x => x.category === "movies").shards[0].sha256;
   const details = JSON.parse(require("zlib").gunzipSync(fs.readFileSync(path.join(result.root, "generations", "fixture-1", "objects", detailShard + ".json.gz"))).toString("utf8"));
   assert.equal(details[0].overview, "plot");
