@@ -1003,9 +1003,10 @@ def api_page_size(category):
 
 
 def hydrate_api_listing_metadata(items):
+    static_mode = catalog_mode() == "static"
     hydrated = []
     for media in items or []:
-        if media.get("media_type") != "tv":
+        if not static_mode and media.get("media_type") != "tv":
             hydrated.append(media)
             continue
         if safe_text(media.get("overview")):
@@ -1013,12 +1014,21 @@ def hydrate_api_listing_metadata(items):
             continue
 
         enriched = dict(media)
-        live_metadata = {}
         try:
-            live_metadata = catalog_api().metadata(media.get("id")) or {}
+            if static_mode:
+                # Static listing records are intentionally lean.  Resolve only
+                # the displayed page's missing metadata so Kodi's folder
+                # ListItem can expose the same plot/art as API mode.  File
+                # variants and the rest of the detail object remain lazy.
+                detail = catalog_api().detail(media.get("id")) or {}
+                live_metadata = {}
+            else:
+                detail = media
+                live_metadata = catalog_api().metadata(media.get("id")) or {}
         except CatalogApiError:
+            detail = media
             live_metadata = {}
-        meta = api_detail_meta(media, live_metadata)
+        meta = api_detail_meta(detail, live_metadata)
         if safe_text(meta.get("overview")):
             enriched["overview"] = meta.get("overview")
         if meta.get("genres"):

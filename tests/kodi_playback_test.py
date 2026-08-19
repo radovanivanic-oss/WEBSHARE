@@ -592,7 +592,7 @@ class KodiSearchTests(unittest.TestCase):
             "display_title": "Enola Holmes 3",
             "media_type": "movie",
             "year": 2026,
-            "overview": None,
+            "overview": "Český popis Enoly Holmesovej 3.",
             "genres": [{"id": 9648, "name": "Mystery"}, {"id": 35, "name": "Comedy"}],
         }
         client.metadata.return_value = {
@@ -617,6 +617,58 @@ class KodiSearchTests(unittest.TestCase):
             ["enola-{}".format(index) for index in range(7)],
         )
         self.assertEqual(captured[0][0][2].info[1]["genre"], "Mystery / Comedy")
+        self.assertEqual(captured[0][0][2].info[1]["plot"], "Český popis Enoly Holmesovej 3.")
+
+    def test_static_listing_hydrates_missing_overview_for_root_list_item(self):
+        client = mock.Mock()
+        client.media.return_value = {
+            "data": [
+                {
+                    "id": 4576,
+                    "title": "Enola Holmes 3",
+                    "display_title": "Enola Holmes 3",
+                    "media_type": "movie",
+                    "year": 2026,
+                    "variant_count": 7,
+                }
+            ],
+            "pagination": {"page": 1, "limit": 50, "total": 1, "pages": 1, "has_more": False},
+        }
+        client.detail.return_value = {
+            "id": 4576,
+            "title": "Enola Holmes 3",
+            "display_title": "Enola Holmes 3",
+            "media_type": "movie",
+            "year": 2026,
+            "overview": "Český popis Enoly Holmesovej 3.",
+            "genres": [{"id": 9648, "name": "Mystery"}],
+        }
+        captured = []
+        with mock.patch.object(addon, "catalog_mode", return_value="static"), \
+             mock.patch.object(addon, "catalog_api", return_value=client), \
+             mock.patch.object(addon.xbmcplugin, "addDirectoryItem", side_effect=lambda *args, **kwargs: captured.append((args, kwargs))), \
+             mock.patch.object(addon.xbmcplugin, "endOfDirectory"), \
+             mock.patch.object(addon.xbmcplugin, "setContent"):
+            addon.api_media({"category": "movies"})
+        self.assertEqual(client.detail.call_args.args, (4576,))
+        self.assertEqual(captured[0][0][2].info[1]["plot"], "Český popis Enoly Holmesovej 3.")
+        self.assertEqual(captured[0][0][2].info[1]["plotoutline"], "Český popis Enoly Holmesovej 3.")
+
+    def test_static_listing_keeps_missing_overview_empty_for_skin_fallback(self):
+        client = mock.Mock()
+        client.media.return_value = {
+            "data": [{"id": 99, "title": "No Description", "display_title": "No Description", "media_type": "movie", "year": 2024, "variant_count": 1}],
+            "pagination": {"page": 1, "limit": 50, "total": 1, "pages": 1, "has_more": False},
+        }
+        client.detail.return_value = {"id": 99, "title": "No Description", "media_type": "movie", "overview": None}
+        captured = []
+        with mock.patch.object(addon, "catalog_mode", return_value="static"), \
+             mock.patch.object(addon, "catalog_api", return_value=client), \
+             mock.patch.object(addon.xbmcplugin, "addDirectoryItem", side_effect=lambda *args, **kwargs: captured.append((args, kwargs))), \
+             mock.patch.object(addon.xbmcplugin, "endOfDirectory"), \
+             mock.patch.object(addon.xbmcplugin, "setContent"):
+            addon.api_media({"category": "movies"})
+        self.assertEqual(captured[0][0][2].info[1]["plot"], "")
 
     def test_movie_metadata_has_safe_description_and_art_fallback(self):
         row = {
