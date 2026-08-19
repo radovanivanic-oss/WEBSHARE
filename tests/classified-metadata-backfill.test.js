@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   buildOverviewEligibility,
+  buildEligibilityRecord,
   deterministicPlanDigest,
   evaluateProviderMetadata,
   isTrustedProviderIdentity,
@@ -25,6 +26,7 @@ test("trusted identity and overview eligibility are fail-closed", () => {
   assert.equal(buildOverviewEligibility(row({ metadata_confidence: 0.79 })), null);
   assert.equal(buildOverviewEligibility(row({ metadata_status: "local" })), null);
   assert.equal(buildOverviewEligibility(row({ overview: "Existing description" })), null);
+  assert.equal(buildEligibilityRecord(row({ external_source: null, external_id: null })), null);
 });
 
 test("exact provider metadata fills only missing fields", () => {
