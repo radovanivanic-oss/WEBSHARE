@@ -46,6 +46,7 @@ DEFAULT_OTHER_CATALOG_URL = CATALOG_BASE_URL + "/videos_other.json.gz"
 DEFAULT_OTHER_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_other.json"
 OLD_CATALOG_URL = "http://192.168.2.226/videos_all.json.gz"
 OLD_FALLBACK_CATALOG_URL = "http://192.168.2.226/videos_all.json"
+_STATIC_CATALOG = None
 
 CATALOG_SCOPES = {
     "all": {
@@ -233,7 +234,11 @@ def use_static_catalog():
 
 
 def static_catalog():
-    return PublicCatalogClient(setting("public_catalog_url", PUBLIC_CATALOG_POINTER_URL))
+    global _STATIC_CATALOG
+    pointer_url = setting("public_catalog_url", PUBLIC_CATALOG_POINTER_URL)
+    if _STATIC_CATALOG is None or _STATIC_CATALOG.pointer_url != pointer_url.rstrip("/"):
+        _STATIC_CATALOG = PublicCatalogClient(pointer_url)
+    return _STATIC_CATALOG
 
 
 def catalog_api():
