@@ -145,7 +145,7 @@ async function liveSample(records, options, outputDir) {
     states: Object.fromEntries([...new Set(results.map((item) => item.state))].sort().map((state) => [state, results.filter((item) => item.state === state).length])),
     fields: Object.fromEntries(["overview", "poster", "backdrop", "genres", "release_date", "original_title"].map((field) => [field, results.filter((item) => item.fields_to_fill.includes(field)).length])),
     languages: Object.fromEntries([...new Set(results.map((item) => item.selected_language).filter(Boolean))].sort().map((language) => [language, results.filter((item) => item.selected_language === language).length])),
-    wrong_provider_identity: results.filter((item) => item.provider_id_verified === false && item.state !== "RETRY_LATER").length,
+    wrong_provider_identity: results.filter((item) => item.provider_id_verified === false && !["RETRY_LATER", "NO_PROVIDER_METADATA"].includes(item.state)).length,
     provider: provider.counters,
     configuration,
     sample_digest: digest(results.map((item) => ({ media_id: item.media_id, state: item.state, fields_to_fill: item.fields_to_fill, selected_language: item.selected_language, overview_digest: item.overview_digest, issues: item.issues })).sort((a, b) => a.media_id - b.media_id)),
