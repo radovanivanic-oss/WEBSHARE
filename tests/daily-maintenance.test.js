@@ -77,6 +77,22 @@ test("B46 portfolio is deterministic, bounded and explicitly best-effort", async
   assert.equal(result.raw_records, 4);
 });
 
+test("B46 empty provider portfolio fails closed", async (t) => {
+  const f = await fixture(t);
+  const db = database(f.databasePath);
+  const discovery = await discoverBestEffortPortfolio({
+    queries: ["a", "b"],
+    policy: { ...B46_DEFAULT_POLICY, maxPagesPerQuery: 1, maxRequests: 2 },
+    fetchPage: async () => ({ files: [] }),
+    normalize: (item) => item,
+  });
+  const plan = buildDailyPlan({ database: db, items: [], discovery, operation: "daily-best-effort", policy: B46_DEFAULT_POLICY, now: "2026-08-19T00:00:00.000Z" });
+  assert.equal(discovery.nonempty_queries, 0);
+  assert.equal(plan.status, "BLOCKED");
+  assert.ok(plan.blocked_reasons.includes("DISCOVERY_EMPTY_PORTFOLIO"));
+  db.close();
+});
+
 test("B46 daily plan cannot deactivate or reactivate from discovery absence", async (t) => {
   const f = await fixture(t);
   const db = database(f.databasePath);
