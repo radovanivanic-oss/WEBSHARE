@@ -11,9 +11,13 @@ const { getCatalogConfig } = require("../src/config/catalog-config");
 const { importCatalog } = require("../scripts/import-catalog-jsonl");
 const {
   DEFAULT_POLICY,
+  DISCOVERY_STATES,
   applyDailyPlan,
   buildDailyPlan,
+  defaultState,
   discoverRecent,
+  discoverRecentSnapshot,
+  advanceSentinelState,
   applyVerificationResults,
   snapshotDatabase,
   stableJson,
@@ -135,4 +139,67 @@ test("approved fixture delta applies atomically and preserves a validated backup
   const after = database(f.databasePath);
   assert.equal(after.prepare("SELECT COUNT(*) AS count FROM files WHERE ident = 'new-ident'").get().count, 1);
   after.close();
+});
+
+test("rolling sentinel captures a baseline without producing a catalog delta", async () => {
+  const pages = [
+    { files: [{ ident: "A", name: "A Movie 2026 1080p.mkv", size: 1, type: "mkv" }, { ident: "B", name: "B Movie 2026 1080p.mkv", size: 1, type: "mkv" }] },
+    { files: [{ ident: "C", name: "C Movie 2026 1080p.mkv", size: 1, type: "mkv" }, { ident: "D", name: "D Movie 2026 1080p.mkv", size: 1, type: "mkv" }] },
+  ];
+  const result = await discoverRecentSnapshot({
+    queryContract: { name: "test-global", coverage: "global", sort: "recent" },
+    policy: { ...DEFAULT_POLICY, sentinelPageSize: 2, sentinelMaxPages: 2, sentinelMaxRequests: 2, sentinelMaxItems: 4 },
+    fetchPage: async ({ offset }) => pages[offset / 2] || { files: [] },
+    normalize: (item) => ({ ...item, ident: item.ident, name: item.name, title: item.name }),
+    state: defaultState(),
+    now: "2026-08-20T00:00:00.000Z",
+  });
+  assert.equal(result.stop_reason, "BASELINE_ONLY");
+  assert.equal(result.state, DISCOVERY_STATES.BASELINE_CAPTURED);
+  assert.deepEqual(result.items, []);
+  assert.equal(result.snapshot.unique_count, 4);
+  assert.throws(() => advanceSentinelState(defaultState(), result), /EXPLICIT_GATE/);
+  const next = advanceSentinelState(defaultState(), result, { allowBaseline: true });
+  assert.equal(next.discovery_state, DISCOVERY_STATES.BASELINE_CAPTURED);
+  assert.equal(next.sentinel.unique_count, 4);
+});
+
+test("rolling sentinel tolerates reordering and requires distributed overlap", async () => {
+  const state = {
+    ...defaultState(),
+    discovery_state: DISCOVERY_STATES.BASELINE_CAPTURED,
+    sentinel: { schema_version: 1, idents: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"] },
+  };
+  const pages = [
+    { files: [{ ident: "N1", name: "N1 Movie 2026 1080p.mkv", size: 1, type: "mkv" }, { ident: "A", name: "A Movie 2026 1080p.mkv", size: 1, type: "mkv" }] },
+    { files: [{ ident: "N2", name: "N2 Movie 2026 1080p.mkv", size: 1, type: "mkv" }, { ident: "B", name: "B Movie 2026 1080p.mkv", size: 1, type: "mkv" }] },
+    { files: [{ ident: "C", name: "C Movie 2026 1080p.mkv", size: 1, type: "mkv" }, { ident: "D", name: "D Movie 2026 1080p.mkv", size: 1, type: "mkv" }] },
+  ];
+  const result = await discoverRecentSnapshot({
+    queryContract: { name: "test-global", coverage: "global", sort: "recent" },
+    policy: { ...DEFAULT_POLICY, sentinelPageSize: 2, sentinelMaxPages: 3, sentinelMaxRequests: 3, sentinelMaxItems: 6, sentinelMinOverlapCount: 4, sentinelMinOverlapRatio: 0.4, sentinelMinOverlapPages: 2 },
+    fetchPage: async ({ offset }) => pages[offset / 2] || { files: [] },
+    normalize: (item) => ({ ...item, ident: item.ident, name: item.name, title: item.name }),
+    state,
+  });
+  assert.equal(result.stop_reason, "SAFE_OVERLAP_CONFIRMED");
+  assert.equal(result.complete, true);
+  assert.equal(result.overlap_count, 4);
+  assert.deepEqual(result.items.map((item) => item.ident), ["A", "B", "C", "D", "N1", "N2"]);
+  const next = advanceSentinelState(state, result);
+  assert.equal(next.discovery_state, DISCOVERY_STATES.ACTIVE);
+});
+
+test("rolling sentinel blocks when the old window is unreachable or the query is not global", async () => {
+  const state = { ...defaultState(), discovery_state: DISCOVERY_STATES.BASELINE_CAPTURED, sentinel: { schema_version: 1, idents: ["A", "B", "C", "D"] } };
+  const unreachable = await discoverRecentSnapshot({
+    queryContract: { name: "test-global", coverage: "global", sort: "recent" },
+    policy: { ...DEFAULT_POLICY, sentinelPageSize: 2, sentinelMaxPages: 2, sentinelMaxRequests: 2, sentinelMaxItems: 4, sentinelMinOverlapCount: 2, sentinelMinOverlapPages: 1 },
+    fetchPage: async () => ({ files: [{ ident: "N", name: "New Movie 2026 1080p.mkv", size: 1, type: "mkv" }, { ident: "M", name: "More Movie 2026 1080p.mkv", size: 1, type: "mkv" }] }),
+    normalize: (item) => ({ ...item, ident: item.ident, name: item.name, title: item.name }),
+    state,
+  });
+  assert.equal(unreachable.stop_reason, "SENTINEL_UNREACHABLE");
+  assert.equal(unreachable.complete, false);
+  assert.equal((await discoverRecentSnapshot({ queryContract: { name: "prefix", coverage: "fuzzy-prefix", sort: "recent" }, state, fetchPage: async () => ({ files: [] }) })).stop_reason, "NON_GLOBAL_QUERY_CONTRACT");
 });

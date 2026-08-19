@@ -8,9 +8,12 @@ const { openCatalogDatabase } = require("../src/db/catalog-db");
 const { acquireCrawlerLock, inspectLock } = require("../lib/crawler/lock");
 const {
   DEFAULT_POLICY,
+  DISCOVERY_STATES,
   applyDailyPlan,
+  advanceSentinelState,
   buildDailyPlan,
   discoverRecent,
+  discoverRecentSnapshot,
   readState,
   selectStaleCandidates,
   writeJsonAtomic,
@@ -39,13 +42,15 @@ function parseArguments(argv) {
     maxDiscoveredItems: argument(argv, "--max-discovered") ? positive(argument(argv, "--max-discovered"), "max-discovered", 100000) : DEFAULT_POLICY.maxDiscoveredItems,
     maxStaleChecks: argument(argv, "--max-stale") ? positive(argument(argv, "--max-stale"), "max-stale", 10000) : DEFAULT_POLICY.maxStaleChecks,
   };
+  const discoveryMode = argument(argv, "--discovery-mode", "rolling-snapshot");
+  if (!["rolling-snapshot", "prefix"].includes(discoveryMode)) throw new Error("discovery-mode must be rolling-snapshot or prefix");
   const prefixValue = argument(argv, "--prefixes");
   if (prefixValue) policy.prefixes = prefixValue.split(",").map((value) => value.trim()).filter(Boolean);
-  return { database, outputDir, statePath, policy, apply: argv.includes("--apply"), verifyStale: argv.includes("--verify-stale"), advanceState: argv.includes("--advance-state"), publicationVerified: argv.includes("--publication-verified"), backupPath: argument(argv, "--backup-path"), expectedPlanSha256: argument(argv, "--expected-plan-sha256") };
+  return { database, outputDir, statePath, policy, discoveryMode, recentQuery: argument(argv, "--recent-query", ""), captureBaseline: argv.includes("--capture-baseline"), apply: argv.includes("--apply"), verifyStale: argv.includes("--verify-stale"), advanceState: argv.includes("--advance-state"), publicationVerified: argv.includes("--publication-verified"), backupPath: argument(argv, "--backup-path"), expectedPlanSha256: argument(argv, "--expected-plan-sha256") };
 }
 
 function usage() {
-  return "node scripts/run-daily-maintenance.js --database FILE --output-dir DIR [--prefixes a,b] [--verify-stale] [--apply --expected-plan-sha256 HASH --backup-path FILE --advance-state --publication-verified]";
+  return "node scripts/run-daily-maintenance.js --database FILE --output-dir DIR [--discovery-mode rolling-snapshot --recent-query QUERY --capture-baseline] [--discovery-mode prefix --prefixes a,b] [--verify-stale] [--apply --expected-plan-sha256 HASH --backup-path FILE --advance-state --publication-verified]";
 }
 
 async function createLiveDependencies() {
@@ -58,6 +63,9 @@ async function createLiveDependencies() {
   return {
     async fetchPage({ prefix, offset, limit }) {
       return fetchSearchPage(client, session, { prefix, wildcardSuffix: "*", sort: "recent", category: "video", offset, limit });
+    },
+    async fetchRecentPage({ query = "", offset, limit }) {
+      return fetchSearchPage(client, session, { prefix: query, wildcardSuffix: "", sort: "recent", category: "video", offset, limit });
     },
     session,
   };
@@ -77,7 +85,15 @@ async function main(options = parseArguments(process.argv.slice(2))) {
     database = openCatalogDatabase(options.database, { readonly: true, fileMustExist: true });
     const staleCandidates = selectStaleCandidates(database, state, new Date().toISOString(), options.policy);
     const deps = await createLiveDependencies();
-    const discovery = await discoverRecent({ prefixes: options.policy.prefixes, state, fetchPage: deps.fetchPage, normalize: normalizeFile, policy: options.policy });
+    const discovery = options.discoveryMode === "rolling-snapshot"
+      ? await discoverRecentSnapshot({
+        state,
+        fetchPage: ({ offset, limit }) => deps.fetchRecentPage({ query: options.recentQuery, offset, limit }),
+        queryContract: { name: "webshare-search", what: options.recentQuery, sort: "recent", category: "video", coverage: options.recentQuery ? "query-slice" : "global" },
+        normalize: normalizeFile,
+        policy: options.policy,
+      })
+      : await discoverRecent({ prefixes: options.policy.prefixes, state, fetchPage: deps.fetchPage, normalize: normalizeFile, policy: options.policy });
     if (discovery.items.length > options.policy.maxDiscoveredItems) discovery.complete = false;
     let verificationOutcomes = [];
     if (options.verifyStale && staleCandidates.length > 0) {
@@ -97,6 +113,13 @@ async function main(options = parseArguments(process.argv.slice(2))) {
     const planPath = path.join(options.outputDir, "daily-plan.json");
     writeJsonAtomic(planPath, plan);
     const report = { schema_version: 1, status: plan.status, plan_sha256: plan.plan_sha256, discovery: { complete: plan.discovery.complete, requests: plan.discovery.requests, page_reports: plan.discovery.page_reports, stop_reason: plan.discovery.stop_reason, observed_items: plan.discovery.observed_items }, counters: plan.counters, blocked_reasons: plan.blocked_reasons, stale_candidates: staleCandidates.length, verification_outcomes: verificationOutcomes.length, safety: plan.safety, plan_path: planPath };
+    report.discovery.state = discovery.state || state.discovery_state || DISCOVERY_STATES.UNINITIALIZED;
+    report.discovery.snapshot = discovery.snapshot ? { unique_count: discovery.snapshot.unique_count, ordered_idents_sha256: discovery.snapshot.ordered_idents_sha256, idents_sha256: discovery.snapshot.idents_sha256 } : null;
+    if (options.captureBaseline) {
+      if (discovery.stop_reason !== "BASELINE_ONLY") throw new Error("DAILY_BASELINE_CAPTURE_REQUIRES_BASELINE_ONLY");
+      writeJsonAtomic(options.statePath, advanceSentinelState(state, discovery, { allowBaseline: true }));
+      report.safety.discovery_state_advanced = true;
+    }
     if (options.apply) {
       if (!options.expectedPlanSha256) throw new Error("DAILY_APPLY_REQUIRES_EXPECTED_PLAN_SHA256");
       if (plan.plan_sha256 !== options.expectedPlanSha256) throw new Error("DAILY_PLAN_DIGEST_MISMATCH");
