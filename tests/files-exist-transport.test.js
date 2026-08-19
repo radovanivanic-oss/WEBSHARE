@@ -5,6 +5,17 @@ const logger = { info() {}, warn() {}, error() {} };
 function session(response, calls = [], loginCalls = []) { return new WebshareSession({ username: "u", password: "p" }, logger, { login: async () => { loginCalls.push(1); return "token"; }, apiClient: { post: async (url, body, options) => { calls.push({ url, body, options }); if (response instanceof Error) throw response; return response; } } }); }
 const ok = (exists) => ({ status: 200, headers: { "content-type": "text/xml; charset=UTF-8" }, data: `<response><status>OK</status><exists>${exists ? 1 : 0}</exists></response>` });
 test("filesExist sends one authenticated form request and normalizes existing/missing", async () => { const calls = []; const s = session(ok(true), calls); const result = await s.filesExist("abc"); assert.deepEqual(result, { exists: true, status: 200 }); assert.equal(calls.length, 1); assert.match(calls[0].url, /\/api\/file_exists\/$/); assert.match(calls[0].body, /ident=abc/); assert.match(calls[0].body, /wst=token/); const missing = await session(ok(false)).filesExist("missing"); assert.deepEqual(missing, { exists: false, status: 200 }); });
+test("filesExistBatch uses the bounded batch endpoint and validates every requested ident", async () => {
+  const calls = [];
+  const response = { status: 200, headers: { "content-type": "text/xml; charset=UTF-8" }, data: "<response><status>OK</status><file><ident>a</ident><exists>1</exists><downloadable>1</downloadable></file><file><ident>b</ident><exists>0</exists><downloadable>0</downloadable></file></response>" };
+  const result = await session(response, calls).filesExistBatch(["a", "b"]);
+  assert.equal(result.files.length, 2);
+  assert.deepEqual(result.files.map((row) => [row.ident, row.exists]), [["a", true], ["b", false]]);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/api\/files_exist\/$/);
+  assert.match(calls[0].body, /idents%5B%5D=a/);
+  await assert.rejects(() => session({ ...response, data: "<response><status>OK</status><file><ident>a</ident><exists>1</exists></file></response>" }).filesExistBatch(["a", "b"]), /Incomplete files_exist batch/);
+});
 test("filesExist rejects malformed, oversized, wrong content type and API errors", async () => { await assert.rejects(() => session(ok(true)).filesExist(""), (e) => e.code === "CLIENT_REQUEST_ERROR"); await assert.rejects(() => session({ status: 200, headers: { "content-type": "text/plain" }, data: "ok" }).filesExist("x"), (e) => e.code === "UNSUPPORTED_RESPONSE"); await assert.rejects(() => session({ status: 200, headers: { "content-type": "text/xml" }, data: "<response><status>OK</status></response>" }).filesExist("x"), (e) => e.code === "MALFORMED_RESPONSE"); await assert.rejects(() => session({ status: 200, headers: { "content-type": "text/xml" }, data: "<response><status>FATAL</status><code>FILE_EXISTS_FATAL_1</code></response>" }).filesExist("x"), (e) => e.code === "FILE_EXISTS_FATAL_1" && e.retryable === false); });
 test("filesExist transport errors are bounded and retryability is explicit", async () => { const error = Object.assign(new Error("secret token password raw body"), { code: "ETIMEDOUT" }); await assert.rejects(() => session(error).filesExist("x"), (e) => e.code === "TIMEOUT" && e.retryable === true && !/secret|token|password|raw body/i.test(e.message)); });
 const fileInfoXml = (fields = "<name>movie.mkv</name><available>1</available><removed>0</removed>") => `<response><status>OK</status>${fields}</response>`;

@@ -11,11 +11,13 @@ const { getCatalogConfig } = require("../src/config/catalog-config");
 const { importCatalog } = require("../scripts/import-catalog-jsonl");
 const {
   DEFAULT_POLICY,
+  B46_DEFAULT_POLICY,
   DISCOVERY_STATES,
   applyDailyPlan,
   buildDailyPlan,
   defaultState,
   discoverRecent,
+  discoverBestEffortPortfolio,
   discoverRecentSnapshot,
   advanceSentinelState,
   applyVerificationResults,
@@ -55,6 +57,44 @@ test("daily discovery deduplicates overlap and requires the prior frontier", asy
   assert.equal(result.complete, true);
   assert.deepEqual(result.items.map((item) => item.ident), ["boundary", "new"]);
   assert.equal(result.requests, 1);
+});
+
+test("B46 portfolio is deterministic, bounded and explicitly best-effort", async () => {
+  const pages = new Map([
+    ["a:0", { files: [{ ident: "A", name: "A Movie 2026 1080p.mkv", size: 1, type: "mkv" }, { ident: "SHARED", name: "Shared Movie 2026 1080p.mkv", size: 1, type: "mkv" }] }],
+    ["b:0", { files: [{ ident: "SHARED", name: "Shared Movie 2026 1080p.mkv", size: 1, type: "mkv" }, { ident: "B", name: "B Movie 2026 1080p.mkv", size: 1, type: "mkv" }] }],
+  ]);
+  const result = await discoverBestEffortPortfolio({
+    queries: ["a", "b"],
+    policy: { ...B46_DEFAULT_POLICY, maxPagesPerQuery: 1, maxRequests: 2, pageSize: 100 },
+    fetchPage: async ({ query }) => pages.get(`${query}:0`),
+    normalize: (item) => ({ ...item, title: item.name, ident: item.ident, name: item.name }),
+  });
+  assert.equal(result.coverage_declaration, "BEST_EFFORT");
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.items.map((item) => item.ident), ["A", "B", "SHARED"]);
+  assert.equal(result.requests, 2);
+  assert.equal(result.raw_records, 4);
+});
+
+test("B46 daily plan cannot deactivate or reactivate from discovery absence", async (t) => {
+  const f = await fixture(t);
+  const db = database(f.databasePath);
+  const row = db.prepare("SELECT id, ident, media_id FROM files WHERE ident = ?").get(f.item.ident);
+  const plan = buildDailyPlan({
+    database: db,
+    items: [],
+    staleCandidates: [row],
+    verificationOutcomes: [{ ident: row.ident, result: "definitive_missing" }],
+    state: { ...defaultState(), verifications: { [row.ident]: { state: "SUSPECT", missing_streak: 1 } } },
+    operation: "daily-best-effort",
+    discovery: { mode: "BEST_EFFORT_RECENT_DISCOVERY", coverage_declaration: "BEST_EFFORT", complete: false },
+    policy: { ...B46_DEFAULT_POLICY, maxDeletionFraction: 1 },
+    now: "2026-08-19T00:00:00.000Z",
+  });
+  assert.equal(plan.status, "BLOCKED");
+  assert.ok(plan.blocked_reasons.includes("DAILY_DISCOVERY_DEACTIVATION_FORBIDDEN"));
+  db.close();
 });
 
 test("daily plan quarantines unclassifiable discoveries and does not advance on ambiguous discovery", async (t) => {

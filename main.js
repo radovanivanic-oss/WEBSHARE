@@ -47,6 +47,7 @@ const API_LOGIN_URL = `${BASE_URL}/api/login/`;
 const SEARCH_URL = WEBSHARE_SEARCH_ENDPOINT;
 const FILE_LINK_URL = `${BASE_URL}/api/file_link/`;
 const FILE_EXISTS_URL = `${BASE_URL}/api/file_exists/`;
+const FILES_EXIST_BATCH_URL = `${BASE_URL}/api/files_exist/`;
 const FILE_INFO_URL = `${BASE_URL}/api/file_info/`;
 const SEARCH_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
 const MIN_VIDEO_SIZE = 1;
@@ -1134,6 +1135,48 @@ class WebshareSession {
         throw error;
       }
       return { exists: String(body.exists[0]) === "1", status: Number(response.status) || 200 };
+    }, { signal });
+  }
+
+  async filesExistBatch(idents, options = {}) {
+    if (!Array.isArray(idents) || idents.length === 0 || idents.length > 50) {
+      throw Object.assign(new Error("Invalid files_exist batch"), { code: "CLIENT_REQUEST_ERROR", retryable: false });
+    }
+    const unique = [...new Set(idents)];
+    if (unique.length !== idents.length || unique.some((ident) => typeof ident !== "string" || ident.length === 0 || ident.length > 256 || /[\u0000-\u001f\u007f]/u.test(ident))) {
+      throw Object.assign(new Error("Invalid files_exist batch ident"), { code: "CLIENT_REQUEST_ERROR", retryable: false });
+    }
+    const signal = options.signal;
+    return this.withWst(async (wst) => {
+      const params = new URLSearchParams({ wst });
+      for (const ident of unique) params.append("idents[]", ident);
+      const requestMeter = options.requestMeter || this.requestMeter;
+      requestMeter?.beforeRequest("files_exist", `files_exist_batch:${unique.length}`);
+      let response;
+      try {
+        response = await (this.apiClient || createApiClient()).post(FILES_EXIST_BATCH_URL, params.toString(), {
+          signal,
+          maxContentLength: 2 * 1024 * 1024,
+          maxBodyLength: 2 * 1024 * 1024,
+        });
+        requestMeter?.afterRequest();
+      } catch (error) {
+        requestMeter?.afterRequest();
+        throw normalizeFilesExistTransportError(error);
+      }
+      if (!String(response.headers?.["content-type"] || "").toLowerCase().includes("xml")) throw Object.assign(new Error("Unsupported files_exist batch response"), { code: "UNSUPPORTED_RESPONSE", retryable: false });
+      let parsed;
+      try { parsed = await parseStringPromise(response.data, { explicitArray: true, trim: true, strict: true }); }
+      catch { throw Object.assign(new Error("Malformed files_exist batch XML"), { code: "MALFORMED_RESPONSE", retryable: false }); }
+      const body = parsed?.response;
+      if (!body || body.status?.length !== 1 || body.status[0] !== "OK") {
+        const code = body?.code?.length === 1 ? String(body.code[0]).slice(0, 64) : "UNKNOWN_API_STATUS";
+        throw Object.assign(new Error("Webshare files_exist batch API error"), { code: /ACCESS|TOKEN|AUTH/i.test(code) ? "AUTHENTICATION_ERROR" : code, retryable: ["429", "RATE_LIMITED"].includes(code) || /^5/.test(String(response.status)), status: response.status || null });
+      }
+      const field = (value) => Array.isArray(value) && value.length === 1 ? String(value[0]) : null;
+      const rows = Array.isArray(body.file) ? body.file.map((row) => ({ ident: field(row.ident), exists: field(row.exists) === "1", downloadable: field(row.downloadable) === "1" })) : [];
+      if (rows.length !== unique.length || rows.some((row) => !row.ident || !unique.includes(row.ident) || typeof row.exists !== "boolean")) throw Object.assign(new Error("Incomplete files_exist batch response"), { code: "MALFORMED_RESPONSE", retryable: false });
+      return { status: Number(response.status) || 200, files: rows };
     }, { signal });
   }
 
