@@ -10,7 +10,7 @@ const { logicalDigest } = require("../lib/bootstrap-backlog");
 
 function argument(argv, name, fallback = null) { const index = argv.indexOf(name); return index >= 0 ? argv[index + 1] || fallback : fallback; }
 function parseArguments(argv) {
-  return { mode: argument(argv, "--mode"), database: argument(argv, "--database"), manifest: argument(argv, "--manifest"), outputDir: argument(argv, "--output-dir"), stagingDb: argument(argv, "--staging-db"), backupPath: argument(argv, "--backup-path"), serviceName: argument(argv, "--service-name", "webshare-catalog-api.service"), writerApproved: argv.includes("--writer-approved") };
+  return { mode: argument(argv, "--mode"), database: argument(argv, "--database"), manifest: argument(argv, "--manifest"), outputDir: argument(argv, "--output-dir"), stagingDb: argument(argv, "--staging-db"), backupPath: argument(argv, "--backup-path"), serviceName: argument(argv, "--service-name", "webshare-catalog-api.service"), writerApproved: argv.includes("--writer-approved"), stagingReady: argv.includes("--staging-ready") };
 }
 function required(value, name) { if (!value) throw new Error(`${name}_REQUIRED`); return path.resolve(value); }
 function writeAtomic(filePath, value) { fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o750 }); const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o640 }); fs.renameSync(temporary, filePath); }
@@ -76,7 +76,7 @@ async function main(options = parseArguments(process.argv.slice(2))) {
   const loaded = loadManifest(manifestPath); fs.mkdirSync(outputDir, { recursive: true, mode: 0o750 });
   const targetDb = options.mode === "dry-run" ? required(options.stagingDb, "STAGING_DB") : databasePath;
   let backup = null;
-  if (options.mode === "dry-run") backup = await backupDatabase(databasePath, targetDb);
+  if (options.mode === "dry-run") backup = options.stagingReady ? { path: targetDb, size: fs.statSync(targetDb).size, prebuilt: true } : await backupDatabase(databasePath, targetDb);
   if (options.mode === "apply") {
     if (!options.writerApproved) throw new Error("BOOTSTRAP_WRITER_APPROVAL_REQUIRED");
     assertServiceStopped(options.serviceName);
