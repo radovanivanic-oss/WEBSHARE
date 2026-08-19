@@ -213,7 +213,10 @@ function rebuildDerivedCatalogData(database) {
 }
 
 function createImportBatch(database, statements, context) {
-  return database.transaction((entries) => {
+  return database.transaction((entries) => applyImportEntries(database, statements, entries, context));
+}
+
+function applyImportEntries(database, statements, entries, context) {
     let inserted = 0;
     let updated = 0;
     for (const entry of entries) {
@@ -320,7 +323,6 @@ function createImportBatch(database, statements, context) {
       }
     }
     return { inserted, updated };
-  });
 }
 
 function createOrResumeRun(database, inputPath, stat, fingerprint, options) {
@@ -510,9 +512,12 @@ if (require.main === module) {
 }
 
 module.exports = {
+  applyImportEntries,
   fileFingerprint,
   importCatalog,
   parseArguments,
+  prepareStatements,
+  createImportBatch,
   rebuildCatalogIndexesAndCounts,
   rebuildDerivedCatalogData,
   rebuildMediaVisibility,

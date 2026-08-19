@@ -31,6 +31,7 @@
     "public-catalog:build": "node scripts/build-public-catalog.js",
     "public-catalog:validate": "node scripts/validate-public-catalog.js",
     "metadata:enrich": "node scripts/enrich-metadata.js",
+    "maintenance:daily": "node scripts/run-daily-maintenance.js",
     "api:start": "node server/catalog-api.js",
     "publish:github": "node publish-exports.js",
     "test": "node --test tests/*.test.js"
