@@ -64,7 +64,7 @@
   </category>
 
   <category label="Informácie">
-    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.8.22" enable="false"/>
+    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.8.23" enable="false"/>
     <setting id="catalog_status_info" type="text" label="Stav katalógu" default="Verejný statický katalóg" enable="false"/>
     <setting id="catalog_items_info" type="text" label="Počet indexovaných položiek" default="Pozri Nástroje / Katalóg" enable="false"/>
     <setting id="catalog_updated_info" type="text" label="Posledná aktualizácia" default="Pozri Nástroje / Katalóg" enable="false"/>

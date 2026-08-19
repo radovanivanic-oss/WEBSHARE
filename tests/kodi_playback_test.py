@@ -401,7 +401,7 @@ class KodiSearchTests(unittest.TestCase):
                 "media_type": "tv",
                 "year": 2026,
             })
-        self.assertEqual(captured[0].label, "Marriage's Completion [2026]")
+        self.assertEqual(captured[0].label, "Marriage's Completion (2026)")
         self.assertEqual(captured[0].info[1]["title"], "Marriage's Completion")
         self.assertEqual(captured[0].info[1]["originaltitle"], "결혼의 완성")
 
@@ -420,11 +420,69 @@ class KodiSearchTests(unittest.TestCase):
         with mock.patch.object(addon.ADDON, "getSetting", side_effect=api_settings):
             self.assertEqual(addon.catalog_mode(), "api")
 
-    def test_static_media_uses_exported_variant_count(self):
+    def test_media_labels_are_library_style_and_hide_variant_counts(self):
         captured = []
         with mock.patch.object(addon.xbmcplugin, "addDirectoryItem", side_effect=lambda *args, **kwargs: captured.append(args[2])):
             addon.add_api_media({"id": 1, "title": "Movie", "media_type": "movie", "year": 2026, "available_files_count": 7})
-        self.assertIn("7 verzií", captured[0].label)
+            addon.add_api_media({"id": 2, "title": "Episode", "media_type": "episode", "year": 2026, "season_number": 2, "episode_number": 3})
+        self.assertEqual(captured[0].label, "Movie (2026)")
+        self.assertNotIn("verzi", captured[0].label.lower())
+        self.assertEqual(captured[1].label, "Episode (S02E03)")
+
+    def test_technical_variant_label_and_size_are_deterministic(self):
+        row = {
+            "name": "Enola Holmes 3 2160p HDR.mkv",
+            "size": 14 * 1024 ** 3 + 512 * 1024 ** 2,
+            "resolution": "2160p",
+            "video_codec": "hevc",
+            "audio_codec": "eac3",
+            "hdr": True,
+            "dolby_vision": False,
+            "languages": ["CZ", "SK"],
+            "has_dubbing": True,
+            "has_subtitles": True,
+            "source": "WEB-DL",
+        }
+        self.assertEqual(addon.human_file_size(734 * 1024 ** 2), "734 MB")
+        self.assertEqual(addon.human_file_size(14 * 1024 ** 3 + 512 * 1024 ** 2), "14.5 GB")
+        label = addon.api_file_label(row)
+        self.assertIn("2160p", label)
+        self.assertIn("HEVC", label)
+        self.assertIn("HDR", label)
+        self.assertIn("CZ/SK", label)
+        self.assertIn("14.5 GB", label)
+        self.assertNotIn("Dolby Vision", label)
+
+    def test_sparse_variant_falls_back_to_filename_and_size(self):
+        label = addon.api_file_label({"name": "Archive release.mkv", "size": 734 * 1024 ** 2})
+        self.assertEqual(label, "Archive release.mkv • 734 MB")
+
+    def test_variant_sort_prefers_quality_then_stable_id(self):
+        rows = [
+            {"id": 3, "ident": "low", "name": "low.mkv", "size": 1, "resolution": "720p"},
+            {"id": 2, "ident": "hdr", "name": "hdr.mkv", "size": 1, "resolution": "1080p", "hdr": True},
+            {"id": 1, "ident": "plain", "name": "plain.mkv", "size": 2, "resolution": "1080p"},
+        ]
+        ordered = sorted(rows, key=addon.variant_sort_key)
+        self.assertEqual([row["ident"] for row in ordered], ["hdr", "plain", "low"])
+
+    def test_variant_rows_retain_parent_media_metadata(self):
+        client = mock.Mock()
+        client.detail.return_value = {
+            "id": 4576, "title": "Enola Holmes 3", "display_title": "Enola Holmes 3",
+            "media_type": "movie", "year": 2026, "overview": "Český popis.",
+            "poster_url": "https://img/poster.jpg", "backdrop_url": "https://img/backdrop.jpg",
+        }
+        client.files.return_value = {"data": [{"id": 1, "ident": "enola-1", "name": "Enola.mkv", "size": 734 * 1024 ** 2}], "pagination": {"pages": 1}}
+        captured = []
+        with mock.patch.object(addon, "catalog_api", return_value=client), \
+             mock.patch.object(addon.xbmcplugin, "addDirectoryItem", side_effect=lambda *args, **kwargs: captured.append(args[2])), \
+             mock.patch.object(addon.xbmcplugin, "endOfDirectory"):
+            addon.api_media_detail({"media_id": "4576"})
+        self.assertEqual(captured[0].info[1]["plot"], "Český popis.")
+        self.assertEqual(captured[0].art["poster"], "https://img/poster.jpg")
+        self.assertEqual(captured[0].art["fanart"], "https://img/backdrop.jpg")
+        self.assertEqual(captured[0].info[1]["title"], "Enola Holmes 3")
 
     def test_normal_settings_do_not_expose_private_or_legacy_catalog_urls(self):
         settings_xml = (ADDON_ROOT / "resources" / "settings.xml").read_text(encoding="utf-8")

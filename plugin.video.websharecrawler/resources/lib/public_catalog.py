@@ -16,7 +16,7 @@ from resources.lib.catalog_api import CatalogApiError
 from resources.lib.paths import profile_path
 
 
-USER_AGENT = "Webshare Atlas Public Catalog/0.8.22"
+USER_AGENT = "Webshare Atlas Public Catalog/0.8.23"
 ROOT_SCHEMA = "webshare-atlas-public-catalog/v1"
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 

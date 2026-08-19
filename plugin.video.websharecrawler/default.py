@@ -5,6 +5,7 @@ from __future__ import absolute_import, division, unicode_literals
 import sys
 import json
 import os
+import re
 from urllib.parse import parse_qsl, urlencode
 
 import xbmc
@@ -1044,22 +1045,12 @@ def hydrate_api_listing_metadata(items):
 
 
 def add_api_media(media):
-    title = media.get("display_title") or media.get("title") or "Bez názvu"
+    title = media_display_label(media)
+    info_title = safe_text(media.get("title") if media.get("media_type") == "episode" else media.get("display_title") or media.get("title")) or "Bez názvu"
     year = media.get("year")
-    versions = int(media.get("available_files_count") or media.get("variant_count") or media.get("versions") or 0)
-    label_parts = [str(year)] if year else []
-    if media.get("media_type") == "episode":
-        label_parts.append(
-            "S{:02d}E{:02d}".format(
-                int(media.get("season_number") or 0),
-                int(media.get("episode_number") or 0),
-            )
-        )
-    if media.get("media_type") == "movie":
-        label_parts.append("{} verzií".format(versions))
-    item = xbmcgui.ListItem(label="{} [{}]".format(title, " | ".join(label_parts)) if label_parts else title)
+    item = xbmcgui.ListItem(label=title)
     info = {
-        "title": title,
+        "title": info_title,
         "originaltitle": media.get("original_title") or media.get("title") or "",
         "plot": media.get("overview") or "",
         "plotoutline": media.get("overview") or "",
@@ -1075,6 +1066,10 @@ def add_api_media(media):
             "video"
         ),
     }
+    if media.get("media_type") == "episode":
+        info["season"] = safe_int(media.get("season_number"))
+        info["episode"] = safe_int(media.get("episode_number"))
+        info["tvshowtitle"] = media.get("series_title") or media.get("display_title") or ""
     if media.get("release_date"):
         info["premiered"] = media["release_date"]
     if media.get("release_date_precision"):
@@ -1134,7 +1129,7 @@ def api_media_detail(params):
     if not isinstance(live_metadata, dict):
         live_metadata = {}
     meta = api_detail_meta(detail, live_metadata)
-    for file_row in files:
+    for file_row in sorted(files, key=variant_sort_key):
         add_api_file(file_row, detail, meta)
     pagination = file_response.get("pagination") or {}
     add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_detail", params, page)
@@ -1280,28 +1275,130 @@ def enrich_api_meta_from_tmdb_id(detail, meta):
     return merged
 
 
+def media_display_label(media):
+    """Return a library-style label; variant counts remain internal metadata."""
+    media = media if isinstance(media, dict) else {}
+    media_type = media.get("media_type")
+    title = media.get("title") if media_type == "episode" else media.get("display_title") or media.get("title")
+    title = safe_text(title) or "Bez názvu"
+    if media_type == "episode":
+        season = safe_int(media.get("season_number"))
+        episode = safe_int(media.get("episode_number"))
+        if season or episode:
+            return "{} (S{:02d}E{:02d})".format(title, season, episode)
+    year = safe_int(media.get("year"))
+    return "{} ({})".format(title, year) if year else title
+
+
+def human_file_size(value):
+    """Format persisted byte counts consistently without exposing raw bytes."""
+    size = max(0, safe_int(value))
+    if size >= 1024 ** 3:
+        return "{:.1f} GB".format(size / float(1024 ** 3)).replace(".0 GB", " GB")
+    if size >= 1024 ** 2:
+        return "{} MB".format(max(1, int(round(size / float(1024 ** 2)))))
+    if size >= 1024:
+        return "{} KB".format(max(1, int(round(size / float(1024)))))
+    return "{} B".format(size)
+
+
+def normalized_resolution(file_row):
+    file_row = file_row if isinstance(file_row, dict) else {}
+    value = safe_text(file_row.get("resolution") or file_row.get("quality")).strip()
+    if value and value.lower() == "unknown":
+        value = ""
+    if value.upper() == "SD":
+        return "SD"
+    match = re.search(r"(?<!\d)(2160|1440|1080|720|576|480|360)p?(?!\d)", value, re.IGNORECASE)
+    if match:
+        return "{}p".format(match.group(1))
+    name = safe_text(file_row.get("name"))
+    match = re.search(r"(?<!\d)(2160|1440|1080|720|576|480|360)p(?!\d)", name, re.IGNORECASE)
+    return "{}p".format(match.group(1)) if match else ""
+
+
+def normalized_codec(file_row):
+    file_row = file_row if isinstance(file_row, dict) else {}
+    value = safe_text(file_row.get("video_codec")) or codec_from_name(file_row.get("name"))
+    compact = value.lower().replace("-", "").replace(".", "")
+    if compact in ("h264", "x264", "avc"):
+        return "H.264"
+    if compact in ("h265", "x265", "hevc"):
+        return "HEVC"
+    if compact == "xvid":
+        return "Xvid"
+    if compact == "av1":
+        return "AV1"
+    return value.upper() if value else ""
+
+
+def normalized_languages(file_row):
+    file_row = file_row if isinstance(file_row, dict) else {}
+    values = file_row.get("languages")
+    if not values:
+        values = safe_text(file_row.get("language")).replace("/", ",")
+    result = []
+    for value in safe_text_list(values):
+        for part in re.split(r"[+/]", value):
+            code = part.strip().upper()
+            if code and code not in result:
+                result.append(code)
+    return result
+
+
+def variant_sort_key(file_row):
+    """Best-known quality first, with stable persisted-ID tie breakers."""
+    file_row = file_row if isinstance(file_row, dict) else {}
+    resolution = normalized_resolution(file_row)
+    resolution_rank = safe_int(resolution[:-1]) if resolution.endswith("p") else 0
+    source = safe_text(file_row.get("source")).lower()
+    source_rank = {
+        "remux": 7,
+        "bluray": 6,
+        "blu-ray": 6,
+        "web-dl": 5,
+        "webdl": 5,
+        "webrip": 4,
+        "web": 3,
+        "hdtv": 2,
+        "tv": 1,
+        "cam": 0,
+    }.get(source, 0)
+    hdr_rank = 2 if file_row.get("dolby_vision") else 1 if file_row.get("hdr") else 0
+    file_id = safe_int(file_row.get("id"), 0)
+    return (-resolution_rank, -hdr_rank, -source_rank, -safe_int(file_row.get("size"), 0), file_id, safe_text(file_row.get("ident")))
+
+
 def api_file_label(file_row):
-    languages = [str(value).upper() for value in file_row.get("languages") or []]
-    parts = [file_row.get("resolution") or "Neznáma kvalita"]
+    file_row = file_row if isinstance(file_row, dict) else {}
+    parts = []
+    resolution = normalized_resolution(file_row)
+    codec = normalized_codec(file_row)
+    languages = normalized_languages(file_row)
+    if resolution:
+        parts.append(resolution)
+    if codec:
+        parts.append(codec)
     if file_row.get("dolby_vision"):
         parts.append("Dolby Vision")
-    if file_row.get("hdr"):
+    elif file_row.get("hdr"):
         parts.append("HDR")
     if file_row.get("source"):
-        parts.append(str(file_row["source"]))
-    if file_row.get("video_codec"):
-        parts.append(str(file_row["video_codec"]).upper())
+        parts.append(safe_text(file_row.get("source")))
     if file_row.get("audio_codec"):
-        parts.append(str(file_row["audio_codec"]).upper())
+        parts.append(safe_text(file_row.get("audio_codec")).upper())
     if languages:
-        parts.append(" + ".join(languages))
+        parts.append("/".join(languages))
     if file_row.get("has_dubbing"):
-        dubbing_language = "CZ/SK" if "CZ" in languages and "SK" in languages else "CZ" if "CZ" in languages else "SK" if "SK" in languages else ""
-        parts.append("{} dabing".format(dubbing_language).strip())
+        parts.append("{} dabing".format("/".join(languages)) if languages else "Dabing")
     if file_row.get("has_subtitles"):
-        subtitle_language = "CZ/SK" if "CZ" in languages and "SK" in languages else "CZ" if "CZ" in languages else "SK" if "SK" in languages else ""
-        parts.append("{} titulky".format(subtitle_language).strip())
-    return " • ".join(parts)
+        parts.append("{} titulky".format("/".join(languages)) if languages else "Titulky")
+    size_label = human_file_size(file_row.get("size"))
+    if parts:
+        parts.append(size_label)
+        return " • ".join(parts)
+    name = safe_text(file_row.get("name")) or "Neznámy súbor"
+    return "{} • {}".format(name, size_label)
 
 
 def add_api_file(file_row, detail, meta):
@@ -1329,8 +1426,8 @@ def add_api_file(file_row, detail, meta):
         "url": "webshare://{}".format(file_row.get("ident") or ""),
     }
     title = row["title"]
-    size_label = "{:.2f} GB".format(row["size"] / float(1024 ** 3))
-    item = xbmcgui.ListItem(label=api_file_label(file_row), label2=size_label)
+    size_label = human_file_size(row["size"])
+    item = xbmcgui.ListItem(label=api_file_label(file_row), label2=row["name"] or size_label)
     item.setProperty("IsPlayable", "true")
     set_video_metadata(item, row, meta, title)
     item.setProperty("VideoCodec", str(file_row.get("video_codec") or "").lower())
