@@ -49,6 +49,7 @@ class PublicCatalogClient(object):
         self._manifest = None
         self._pointer = None
         self._records = {}
+        self._search_indexes = {}
         self._objects = {}
         self._pending_activation = False
 
@@ -186,6 +187,16 @@ class PublicCatalogClient(object):
         for shard in manifest_row.get("shards", []):
             records.extend(self._object(shard))
         self._records[category] = records
+        index = {}
+        for row in records:
+            values = []
+            for key in ("display_title", "title", "original_title"):
+                values.extend(_tokens(row.get(key) or ""))
+            for alias in row.get("aliases") or []:
+                values.extend(_tokens(alias))
+            for token in set(values):
+                index.setdefault(token, set()).add(int(row.get("id") or 0))
+        self._search_indexes[category] = index
         return records
 
     def _matches(self, row, query):
@@ -205,7 +216,14 @@ class PublicCatalogClient(object):
             rows.extend(self._category_records(category_name))
         query = params.get("query") or params.get("q")
         if query:
-            rows = [row for row in rows if self._matches(row, query)]
+            query_tokens = _tokens(query)
+            candidate_ids = None
+            for category_name in categories:
+                index = self._search_indexes.get(category_name, {})
+                token_ids = [index.get(token, set()) for token in query_tokens]
+                category_ids = set.intersection(*token_ids) if token_ids else set()
+                candidate_ids = category_ids if candidate_ids is None else candidate_ids.union(category_ids)
+            rows = [row for row in rows if int(row.get("id") or 0) in (candidate_ids or set())]
         if params.get("year"):
             rows = [row for row in rows if int(row.get("year") or 0) == int(params["year"])]
         if params.get("genre"):
