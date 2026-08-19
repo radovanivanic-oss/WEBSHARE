@@ -310,9 +310,19 @@ class PublicCatalogClient(object):
         return self.media(**params)
 
     def _find_media(self, media_id):
+        numeric_id = int(media_id)
+        shard_range = int(self._ensure_manifest().get("shard_range") or 25000)
+        range_number = numeric_id // shard_range
+        for category in self._ensure_manifest().get("categories", []):
+            shard = next((item for item in category.get("shards", []) if int(item.get("range", -1)) == range_number), None)
+            if not shard:
+                continue
+            for row in self._object(shard):
+                if int(row.get("id") or 0) == numeric_id:
+                    return row
         for category in (row.get("category") for row in self._ensure_manifest().get("categories", [])):
             for row in self._category_records(category):
-                if int(row.get("id") or 0) == int(media_id):
+                if int(row.get("id") or 0) == numeric_id:
                     return row
         group = self._range_item("episodes", media_id)
         for episode in (group or {}).get("episodes", []):

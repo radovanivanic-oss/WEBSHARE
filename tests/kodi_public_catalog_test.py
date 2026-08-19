@@ -30,7 +30,7 @@ class PublicCatalogTests(unittest.TestCase):
             "schema_version": 1,
             "generation_id": "fixture",
             "shard_range": 25000,
-            "categories": [{"category": "movies", "record_count": 1, "shards": [{"sha256": "m", "range": 0}]}, {"category": "series", "record_count": 1, "shards": [{"sha256": "s", "range": 0}]}],
+            "categories": [{"category": "movies", "record_count": 1, "shards": [{"sha256": "m", "range": 10}]}, {"category": "series", "record_count": 1, "shards": [{"sha256": "s", "range": 40}]}],
             "files": {"shards": [{"sha256": "f", "range": 10}]},
             "episodes": {"shards": [{"sha256": "e", "range": 40}]},
         }
