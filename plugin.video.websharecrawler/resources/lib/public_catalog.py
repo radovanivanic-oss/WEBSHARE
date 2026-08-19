@@ -293,7 +293,7 @@ class PublicCatalogClient(object):
         reverse = str(params.get("order", "desc")).lower() != "asc"
         if sort in ("release_date_desc", "series_release_date_desc"):
             today = date.today().isoformat()
-            rows = [row for row in rows if not row.get("release_date") or row.get("release_date") <= today]
+            rows = [row for row in rows if not (row.get("latest_release_date") or row.get("release_date")) or (row.get("latest_release_date") or row.get("release_date")) <= today]
             rows.sort(key=lambda row: (row.get("latest_release_date") or row.get("release_date") or "0000-00-00", row.get("latest_episode_year") or row.get("year") or 0, row.get("id") or 0), reverse=True)
         elif sort == "title":
             rows.sort(key=lambda row: ((row.get("display_title") or row.get("title") or "").casefold(), row.get("id") or 0), reverse=reverse)
