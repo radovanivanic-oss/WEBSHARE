@@ -10,7 +10,7 @@ const { logicalDigest } = require("../lib/bootstrap-backlog");
 
 function argument(argv, name, fallback = null) { const index = argv.indexOf(name); return index >= 0 ? argv[index + 1] || fallback : fallback; }
 function parseArguments(argv) {
-  return { mode: argument(argv, "--mode"), database: argument(argv, "--database"), manifest: argument(argv, "--manifest"), outputDir: argument(argv, "--output-dir"), stagingDb: argument(argv, "--staging-db"), backupPath: argument(argv, "--backup-path"), serviceName: argument(argv, "--service-name", "webshare-catalog-api.service"), writerApproved: argv.includes("--writer-approved"), stagingReady: argv.includes("--staging-ready") };
+  return { mode: argument(argv, "--mode"), database: argument(argv, "--database"), manifest: argument(argv, "--manifest"), outputDir: argument(argv, "--output-dir"), stagingDb: argument(argv, "--staging-db"), backupPath: argument(argv, "--backup-path"), validatedBackup: argument(argv, "--validated-backup"), serviceName: argument(argv, "--service-name", "webshare-catalog-api.service"), writerApproved: argv.includes("--writer-approved"), stagingReady: argv.includes("--staging-ready") };
 }
 function required(value, name) { if (!value) throw new Error(`${name}_REQUIRED`); return path.resolve(value); }
 function writeAtomic(filePath, value) { fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o750 }); const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o640 }); fs.renameSync(temporary, filePath); }
@@ -80,7 +80,15 @@ async function main(options = parseArguments(process.argv.slice(2))) {
   if (options.mode === "apply") {
     if (!options.writerApproved) throw new Error("BOOTSTRAP_WRITER_APPROVAL_REQUIRED");
     assertServiceStopped(options.serviceName);
-    backup = await backupDatabase(databasePath, required(options.backupPath, "BACKUP_PATH"));
+    if (options.validatedBackup) {
+      const validatedPath = required(options.validatedBackup, "VALIDATED_BACKUP");
+      if (!fs.existsSync(validatedPath)) throw new Error("BOOTSTRAP_VALIDATED_BACKUP_MISSING");
+      const check = openCatalogDatabase(validatedPath, { readonly: true, fileMustExist: true });
+      try { assertIntegrity(check, "BOOTSTRAP_VALIDATED_BACKUP"); } finally { check.close(); }
+      backup = { path: validatedPath, size: fs.statSync(validatedPath).size, sha256: require("node:crypto").createHash("sha256").update(fs.readFileSync(validatedPath)).digest("hex"), prevalidated: true };
+    } else {
+      backup = await backupDatabase(databasePath, required(options.backupPath, "BACKUP_PATH"));
+    }
   }
   const database = openCatalogDatabase(targetDb, { readonly: false, fileMustExist: true }); const runId = `b46.3-${Date.now()}`; const executions = [];
   try {
