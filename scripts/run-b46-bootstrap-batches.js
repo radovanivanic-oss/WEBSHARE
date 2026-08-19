@@ -6,11 +6,11 @@ const { execFileSync } = require("node:child_process");
 const { openCatalogDatabase, nowIso } = require("../src/db/catalog-db");
 const { applyImportEntries, prepareStatements, rebuildCatalogIndexesAndCounts, rebuildMediaVisibility } = require("./import-catalog-jsonl");
 const { sha256, snapshotDatabase } = require("../lib/daily-maintenance");
-const { logicalDigest } = require("../lib/bootstrap-backlog");
+const { logicalDigest, verifyFileSha256 } = require("../lib/bootstrap-backlog");
 
 function argument(argv, name, fallback = null) { const index = argv.indexOf(name); return index >= 0 ? argv[index + 1] || fallback : fallback; }
 function parseArguments(argv) {
-  return { mode: argument(argv, "--mode"), database: argument(argv, "--database"), manifest: argument(argv, "--manifest"), outputDir: argument(argv, "--output-dir"), stagingDb: argument(argv, "--staging-db"), backupPath: argument(argv, "--backup-path"), validatedBackup: argument(argv, "--validated-backup"), serviceName: argument(argv, "--service-name", "webshare-catalog-api.service"), writerApproved: argv.includes("--writer-approved"), stagingReady: argv.includes("--staging-ready") };
+  return { mode: argument(argv, "--mode"), database: argument(argv, "--database"), manifest: argument(argv, "--manifest"), outputDir: argument(argv, "--output-dir"), stagingDb: argument(argv, "--staging-db"), backupPath: argument(argv, "--backup-path"), validatedBackup: argument(argv, "--validated-backup"), validatedBackupSha256: argument(argv, "--validated-backup-sha256"), serviceName: argument(argv, "--service-name", "webshare-catalog-api.service"), writerApproved: argv.includes("--writer-approved"), stagingReady: argv.includes("--staging-ready") };
 }
 function required(value, name) { if (!value) throw new Error(`${name}_REQUIRED`); return path.resolve(value); }
 function writeAtomic(filePath, value) { fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o750 }); const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o640 }); fs.renameSync(temporary, filePath); }
@@ -44,7 +44,7 @@ async function backupDatabase(sourcePath, targetPath) {
   try { await source.backup(targetPath); } finally { source.close(); }
   const check = openCatalogDatabase(targetPath, { readonly: true, fileMustExist: true });
   try { assertIntegrity(check, "BOOTSTRAP_BACKUP"); } finally { check.close(); }
-  return { path: targetPath, size: fs.statSync(targetPath).size, sha256: require("node:crypto").createHash("sha256").update(fs.readFileSync(targetPath)).digest("hex") };
+  return { path: targetPath, size: fs.statSync(targetPath).size, sha256: await verifyFileSha256(targetPath) };
 }
 function applyOneBatch(database, batch, runId) {
   const existing = database.prepare("SELECT ident, media_id, is_active FROM files WHERE ident IN (" + batch.records.map(() => "?").join(",") + ")").all(batch.records.map((row) => row.ident));
@@ -85,7 +85,7 @@ async function main(options = parseArguments(process.argv.slice(2))) {
       if (!fs.existsSync(validatedPath)) throw new Error("BOOTSTRAP_VALIDATED_BACKUP_MISSING");
       const check = openCatalogDatabase(validatedPath, { readonly: true, fileMustExist: true });
       try { assertIntegrity(check, "BOOTSTRAP_VALIDATED_BACKUP"); } finally { check.close(); }
-      backup = { path: validatedPath, size: fs.statSync(validatedPath).size, sha256: require("node:crypto").createHash("sha256").update(fs.readFileSync(validatedPath)).digest("hex"), prevalidated: true };
+      backup = { path: validatedPath, size: fs.statSync(validatedPath).size, sha256: await verifyFileSha256(validatedPath, options.validatedBackupSha256), expected_sha256: options.validatedBackupSha256 || null, prevalidated: true };
     } else {
       backup = await backupDatabase(databasePath, required(options.backupPath, "BACKUP_PATH"));
     }
@@ -102,4 +102,4 @@ async function main(options = parseArguments(process.argv.slice(2))) {
   } finally { database.close(); }
 }
 if (require.main === module) main().catch((error) => { console.error(error.message); process.exitCode = 1; });
-module.exports = { assertIntegrity, loadManifest, main };
+module.exports = { assertIntegrity, loadManifest, main, parseArguments };
