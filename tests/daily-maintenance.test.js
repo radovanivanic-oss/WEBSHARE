@@ -138,6 +138,38 @@ test("two definitive missing observations are required before deactivation", asy
   db.close();
 });
 
+test("weekly stale plan records first absence without deactivation and confirms only on the next run", async (t) => {
+  const f = await fixture(t);
+  const db = database(f.databasePath);
+  const row = db.prepare("SELECT id, ident, media_id FROM files WHERE ident = ?").get(f.item.ident);
+  const policy = { ...B46_DEFAULT_POLICY, maxDeletionFraction: 1 };
+  const first = buildDailyPlan({
+    database: db,
+    operation: "weekly-stale",
+    state: defaultState(),
+    staleCandidates: [row],
+    verificationOutcomes: [{ ident: row.ident, result: "definitive_missing" }],
+    discovery: { complete: true, coverage_declaration: "NOT_APPLICABLE" },
+    policy,
+    now: "2026-08-19T00:00:00.000Z",
+  });
+  assert.equal(first.status, "NO_CHANGES");
+  assert.equal(first.counters.confirmed_missing, 0);
+  const second = buildDailyPlan({
+    database: db,
+    operation: "weekly-stale",
+    state: first.next_state,
+    staleCandidates: [row],
+    verificationOutcomes: [{ ident: row.ident, result: "definitive_missing" }],
+    discovery: { complete: true, coverage_declaration: "NOT_APPLICABLE" },
+    policy,
+    now: "2026-08-26T00:00:00.000Z",
+  });
+  assert.equal(second.status, "READY_FOR_REVIEW");
+  assert.equal(second.counters.confirmed_missing, 1);
+  db.close();
+});
+
 test("plan digest is deterministic for the same database snapshot and inputs", async (t) => {
   const f = await fixture(t);
   const db = database(f.databasePath);

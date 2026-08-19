@@ -46,7 +46,7 @@ function parseArguments(argv) {
     maxPagesPerQuery: argument(argv, "--max-pages-per-query") ? positive(argument(argv, "--max-pages-per-query"), "max-pages-per-query", 100) : B46_DEFAULT_POLICY.maxPagesPerQuery,
     maxRequests: argument(argv, "--max-requests") ? positive(argument(argv, "--max-requests"), "max-requests", 1000) : (mode === "daily-best-effort" ? B46_DEFAULT_POLICY.maxRequests : DEFAULT_POLICY.maxRequests),
     maxDiscoveredItems: argument(argv, "--max-discovered") ? positive(argument(argv, "--max-discovered"), "max-discovered", 100000) : (mode === "daily-best-effort" ? B46_DEFAULT_POLICY.maxDiscoveredItems : DEFAULT_POLICY.maxDiscoveredItems),
-    maxStaleChecks: argument(argv, "--max-stale") ? positive(argument(argv, "--max-stale"), "max-stale", 10000) : DEFAULT_POLICY.maxStaleChecks,
+    maxStaleChecks: argument(argv, "--max-stale") ? positive(argument(argv, "--max-stale"), "max-stale", 100000) : (mode === "weekly-stale" ? B46_DEFAULT_POLICY.maxStaleChecks : DEFAULT_POLICY.maxStaleChecks),
   };
   const discoveryMode = argument(argv, "--discovery-mode", mode === "daily-best-effort" ? "best-effort" : "rolling-snapshot");
   if (!["best-effort", "rolling-snapshot", "prefix"].includes(discoveryMode)) throw new Error("discovery-mode is invalid");
@@ -54,7 +54,7 @@ function parseArguments(argv) {
   if (prefixValue) policy.prefixes = prefixValue.split(",").map((value) => value.trim()).filter(Boolean);
   const queriesValue = argument(argv, "--queries");
   const queries = queriesValue ? queriesValue.split(",").map((value) => value.trim()).filter(Boolean) : [...B46_QUERY_PORTFOLIO];
-  const batchSize = argument(argv, "--batch-size", "3");
+  const batchSize = argument(argv, "--batch-size", "50");
   return { database, outputDir, statePath, policy, mode, discoveryMode, queries, batchSize: positive(batchSize, "batch-size", 50), recentQuery: argument(argv, "--recent-query", ""), captureBaseline: argv.includes("--capture-baseline"), apply: argv.includes("--apply"), verifyStale: argv.includes("--verify-stale"), advanceState: argv.includes("--advance-state"), publicationVerified: argv.includes("--publication-verified"), backupPath: argument(argv, "--backup-path"), expectedPlanSha256: argument(argv, "--expected-plan-sha256") };
 }
 
