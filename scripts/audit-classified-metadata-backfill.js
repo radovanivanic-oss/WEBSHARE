@@ -82,7 +82,7 @@ function loadProvider(options, config, outputDir) {
   if (!config.tmdbApiKey) throw new Error("TMDB_API_KEY is required for live-sample mode");
   const cache = createMetadataFileCache({ root: options.cacheDir || path.join(outputDir, "provider-cache"), provider: "tmdb", version: "B41-exact-id-v1", ttlDays: 30 });
   const counters = { provider_requests: 0, cache_hits: 0, retryable_errors: 0, not_found: 0, malformed: 0 };
-  const client = new TmdbClient(config, null, { warn: (message, data) => { if (data?.status === 429) counters.retryable_errors += 1; } }, { cacheStore: cache, onRequest: () => { counters.provider_requests += 1; }, onCacheHit: () => { counters.cache_hits += 1; }, minRequestIntervalMs: 2000 });
+  const client = new TmdbClient(config, null, { warn: (message, data) => { if (data?.status === 429) counters.retryable_errors += 1; } }, { cacheStore: cache, onAttempt: () => { counters.provider_requests += 1; }, onCacheHit: () => { counters.cache_hits += 1; }, minRequestIntervalMs: 2000 });
   return { client, counters, cache };
 }
 

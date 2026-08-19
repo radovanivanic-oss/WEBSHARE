@@ -32,6 +32,7 @@ class TmdbClient {
     });
     this.cacheStore = options.cacheStore || null;
     this.onCacheHit = options.onCacheHit || (() => {});
+    this.onAttempt = options.onAttempt || (() => {});
     this.onRequest = options.onRequest || (() => {});
     this.minRequestIntervalMs = Math.max(0, Number(options.minRequestIntervalMs || 0));
     this.lastRequestAt = 0;
@@ -70,6 +71,7 @@ class TmdbClient {
         const elapsed = Date.now() - this.lastRequestAt;
         const delay = Math.max(Number(this.config.tmdbRequestDelayMs || 0), this.minRequestIntervalMs - elapsed);
         if (delay > 0) await sleep(delay);
+        this.onAttempt({ endpoint, language, params: requestParams, attempt });
         this.lastRequestAt = Date.now();
         const response = await this.client.get(endpoint, {
           params: { ...requestParams, api_key: this.config.tmdbApiKey },
