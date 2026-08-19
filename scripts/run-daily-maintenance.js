@@ -41,11 +41,11 @@ function parseArguments(argv) {
   };
   const prefixValue = argument(argv, "--prefixes");
   if (prefixValue) policy.prefixes = prefixValue.split(",").map((value) => value.trim()).filter(Boolean);
-  return { database, outputDir, statePath, policy, apply: argv.includes("--apply"), verifyStale: argv.includes("--verify-stale"), advanceState: argv.includes("--advance-state"), backupPath: argument(argv, "--backup-path"), expectedPlanSha256: argument(argv, "--expected-plan-sha256") };
+  return { database, outputDir, statePath, policy, apply: argv.includes("--apply"), verifyStale: argv.includes("--verify-stale"), advanceState: argv.includes("--advance-state"), publicationVerified: argv.includes("--publication-verified"), backupPath: argument(argv, "--backup-path"), expectedPlanSha256: argument(argv, "--expected-plan-sha256") };
 }
 
 function usage() {
-  return "node scripts/run-daily-maintenance.js --database FILE --output-dir DIR [--prefixes a,b] [--verify-stale] [--apply --expected-plan-sha256 HASH --backup-path FILE]";
+  return "node scripts/run-daily-maintenance.js --database FILE --output-dir DIR [--prefixes a,b] [--verify-stale] [--apply --expected-plan-sha256 HASH --backup-path FILE --advance-state --publication-verified]";
 }
 
 async function createLiveDependencies() {
@@ -96,11 +96,12 @@ async function main(options = parseArguments(process.argv.slice(2))) {
     if (options.expectedPlanSha256 && options.expectedPlanSha256 !== plan.plan_sha256) throw new Error("DAILY_EXPECTED_PLAN_SHA256_MISMATCH");
     const planPath = path.join(options.outputDir, "daily-plan.json");
     writeJsonAtomic(planPath, plan);
-    const report = { schema_version: 1, status: plan.status, plan_sha256: plan.plan_sha256, discovery: plan.discovery, counters: plan.counters, blocked_reasons: plan.blocked_reasons, stale_candidates: staleCandidates.length, verification_outcomes: verificationOutcomes.length, safety: plan.safety, plan_path: planPath };
+    const report = { schema_version: 1, status: plan.status, plan_sha256: plan.plan_sha256, discovery: { complete: plan.discovery.complete, requests: plan.discovery.requests, page_reports: plan.discovery.page_reports, stop_reason: plan.discovery.stop_reason, observed_items: plan.discovery.observed_items }, counters: plan.counters, blocked_reasons: plan.blocked_reasons, stale_candidates: staleCandidates.length, verification_outcomes: verificationOutcomes.length, safety: plan.safety, plan_path: planPath };
     if (options.apply) {
       if (!options.expectedPlanSha256) throw new Error("DAILY_APPLY_REQUIRES_EXPECTED_PLAN_SHA256");
       if (plan.plan_sha256 !== options.expectedPlanSha256) throw new Error("DAILY_PLAN_DIGEST_MISMATCH");
       if (plan.status !== "READY_FOR_REVIEW") throw new Error("DAILY_PLAN_NOT_READY");
+      if (!options.advanceState || !options.publicationVerified) throw new Error("DAILY_APPLY_REQUIRES_POST_PUBLICATION_STATE_GATE");
       const applied = await applyDailyPlan({ databasePath: options.database, plan, backupPath: options.backupPath, policy: options.policy });
       report.applied = applied;
       report.safety = { ...report.safety, sqlite_write_performed: true, import_performed: applied.result.inserted > 0, deactivation_performed: applied.result.deactivated > 0 };

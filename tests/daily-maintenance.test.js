@@ -11,6 +11,7 @@ const { getCatalogConfig } = require("../src/config/catalog-config");
 const { importCatalog } = require("../scripts/import-catalog-jsonl");
 const {
   DEFAULT_POLICY,
+  applyDailyPlan,
   buildDailyPlan,
   discoverRecent,
   applyVerificationResults,
@@ -113,4 +114,25 @@ test("provider outage never becomes a deletion plan", async (t) => {
   assert.ok(plan.blocked_reasons.includes("STALE_VERIFICATION_ERRORS"));
   assert.equal(plan.deactivations.length, 0);
   db.close();
+});
+
+test("approved fixture delta applies atomically and preserves a validated backup", async (t) => {
+  const f = await fixture(t);
+  const db = database(f.databasePath);
+  const newItem = { ident: "new-ident", name: "New Movie 2026 1080p WEB-DL H264.mkv", title: "New Movie 2026 1080p WEB-DL H264.mkv", size: 2000, type: "mkv", extension: "mkv", category: "video", url: "webshare://new-ident", mime: "video/x-matroska" };
+  const plan = buildDailyPlan({ database: db, items: [newItem], discovery: { complete: true }, now: "2026-08-19T00:00:00.000Z", policy: { ...DEFAULT_POLICY, maxDeletionFraction: 1 } });
+  assert.equal(plan.status, "READY_FOR_REVIEW");
+  db.close();
+  const backup = path.join(f.root, "backup.sqlite");
+  const applied = await applyDailyPlan({ databasePath: f.databasePath, plan, backupPath: backup, policy: { ...DEFAULT_POLICY, maxDeletionFraction: 1 } });
+  assert.equal(applied.result.inserted, 1);
+  assert.equal(applied.result.deactivated, 0);
+  assert.equal(fs.existsSync(backup), true);
+  const check = database(backup);
+  assert.equal(check.pragma("quick_check", { simple: true }), "ok");
+  assert.equal(check.prepare("SELECT COUNT(*) AS count FROM files WHERE ident = 'new-ident'").get().count, 0);
+  check.close();
+  const after = database(f.databasePath);
+  assert.equal(after.prepare("SELECT COUNT(*) AS count FROM files WHERE ident = 'new-ident'").get().count, 1);
+  after.close();
 });
