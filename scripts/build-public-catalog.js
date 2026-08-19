@@ -7,7 +7,7 @@ function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
-    if (!["--database", "--output-dir", "--generation-id", "--object-base-url"].includes(key) || !argv[i + 1]) throw new Error("usage: node scripts/build-public-catalog.js --database FILE --output-dir DIR --generation-id ID [--object-base-url URL]");
+    if (!["--database", "--output-dir", "--generation-id", "--object-base-url", "--build-source-commit"].includes(key) || !argv[i + 1]) throw new Error("usage: node scripts/build-public-catalog.js --database FILE --output-dir DIR --generation-id ID [--object-base-url URL] [--build-source-commit COMMIT]");
     out[key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = argv[++i];
   }
   if (!out.database || !out.outputDir || !out.generationId) throw new Error("missing required arguments");

@@ -50,7 +50,7 @@ function fixture(t) {
 
 test("builds and validates a deterministic public media/series/files read model", t => {
   const f = fixture(t);
-  const result = buildPublicCatalog({ database: f.dbPath, outputDir: f.output, generationId: "fixture-1" });
+  const result = buildPublicCatalog({ database: f.dbPath, outputDir: f.output, generationId: "fixture-1", buildSourceCommit: "fixture-commit" });
   const validation = validatePublicCatalog(result.root);
   assert.equal(validation.pass, true);
   assert.equal(validation.media, 2);
@@ -59,6 +59,7 @@ test("builds and validates a deterministic public media/series/files read model"
   assert.equal(result.manifest.unclassified_exported, 0);
   const manifest = JSON.parse(fs.readFileSync(path.join(result.root, "generations", "fixture-1", "manifest.json"), "utf8"));
   assert.equal(manifest.source_schema_version, 9);
+  assert.equal(manifest.build_source_commit, "fixture-commit");
   assert.ok(manifest.categories.find(x => x.category === "series").record_count === 1);
 });
 
