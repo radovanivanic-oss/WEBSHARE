@@ -16,7 +16,7 @@ from resources.lib.catalog_api import CatalogApiError
 from resources.lib.paths import profile_path
 
 
-USER_AGENT = "Webshare Atlas Public Catalog/0.8.16"
+USER_AGENT = "Webshare Atlas Public Catalog/0.8.17"
 ROOT_SCHEMA = "webshare-atlas-public-catalog/v1"
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 
@@ -59,8 +59,11 @@ class PublicCatalogClient(object):
             os.makedirs(parent)
         return path
 
-    def _get(self, url):
-        request = Request(url, headers={"Accept": "application/json, */*", "Accept-Encoding": "gzip", "User-Agent": USER_AGENT})
+    def _get(self, url, accept_encoding="gzip"):
+        headers = {"Accept": "application/json, */*", "User-Agent": USER_AGENT}
+        if accept_encoding:
+            headers["Accept-Encoding"] = accept_encoding
+        request = Request(url, headers=headers)
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 return response.read()
@@ -68,7 +71,7 @@ class PublicCatalogClient(object):
             raise PublicCatalogError("Verejný katalóg nie je dostupný: {}".format(exc))
 
     def _load_json_url(self, url):
-        raw = self._get(url)
+        raw = self._get(url, accept_encoding="identity")
         try:
             return json.loads(raw.decode("utf-8"))
         except Exception as exc:
@@ -102,7 +105,7 @@ class PublicCatalogClient(object):
             if pointer.get("schema") != "webshare-atlas-public-catalog-current/v1":
                 raise PublicCatalogError("Neplatný verejný katalógový ukazovateľ")
             manifest_url = urljoin(self.pointer_url, pointer.get("manifest_path", ""))
-            raw_manifest = self._get(manifest_url)
+            raw_manifest = self._get(manifest_url, accept_encoding="identity")
             if pointer.get("manifest_sha256") and _sha256(raw_manifest) != pointer.get("manifest_sha256"):
                 raise PublicCatalogError("Kontrolný súčet verejného manifestu nesedí")
             try:
