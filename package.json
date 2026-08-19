@@ -35,6 +35,7 @@
     "maintenance:weekly": "node scripts/run-daily-maintenance.js --mode weekly-stale",
     "enumeration:compare": "node scripts/compare-enumeration-snapshot.js",
     "enumeration:benchmark": "node scripts/benchmark-enumeration-only.js",
+    "provenance:daily-candidates:audit": "node scripts/audit-daily-candidate-provenance.js",
     "api:start": "node server/catalog-api.js",
     "publish:github": "node publish-exports.js",
     "test": "node --test tests/*.test.js"
