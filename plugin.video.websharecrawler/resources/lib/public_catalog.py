@@ -120,8 +120,10 @@ class PublicCatalogClient(object):
             active_path = self._path("active.json")
             if os.path.exists(active_path):
                 try:
-                    active = json.loads(open(active_path, "r", encoding="utf-8").read())
-                    manifest = json.loads(open(self._path("generations/{}/manifest.json".format(active["pointer"]["generation_id"])), "r", encoding="utf-8").read())
+                    with open(active_path, "r", encoding="utf-8") as handle:
+                        active = json.loads(handle.read())
+                    with open(self._path("generations/{}/manifest.json".format(active["pointer"]["generation_id"])), "r", encoding="utf-8") as handle:
+                        manifest = json.loads(handle.read())
                     self._pointer = active["pointer"]
                     self._manifest = manifest
                     self._manifest_url = active["manifest_url"]
