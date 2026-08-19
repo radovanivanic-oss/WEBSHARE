@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import json
 import os
@@ -75,6 +76,27 @@ class PublicCatalogTests(unittest.TestCase):
         responses = [json.dumps(new_pointer).encode("utf-8"), new_raw]
         client._get = lambda url: responses.pop(0) if responses else b"not-gzip"
         client.refresh()
+        with self.assertRaises(PublicCatalogError):
+            client._object({"sha256": hashlib.sha256(b"expected").hexdigest()})
+        with open(os.path.join(client.cache_root, "active.json"), "r", encoding="utf-8") as handle:
+            active = json.loads(handle.read())
+        self.assertEqual(active["pointer"]["generation_id"], "old")
+
+    def test_later_object_failure_rolls_back_after_new_generation_activation(self):
+        client = self.client()
+        old_pointer = {"generation_id": "old", "manifest_path": "generations/old/manifest.json"}
+        old_manifest = dict(client._manifest, generation_id="old")
+        client._save_json(client._path("generations/old/manifest.json"), old_manifest)
+        client._save_json(client._path("active.json"), {"pointer": old_pointer, "manifest_url": "https://catalog.example/generations/old/manifest.json"})
+        client._pointer = {"generation_id": "new"}
+        client._manifest = dict(old_manifest, generation_id="new")
+        client._manifest_url = "https://catalog.example/generations/new/manifest.json"
+        client._pending_activation = True
+        good = gzip.compress(b"[]")
+        good_sha = hashlib.sha256(good).hexdigest()
+        client._get = lambda url: good
+        client._object({"sha256": good_sha})
+        client._get = lambda url: b"broken"
         with self.assertRaises(PublicCatalogError):
             client._object({"sha256": hashlib.sha256(b"expected").hexdigest()})
         with open(os.path.join(client.cache_root, "active.json"), "r", encoding="utf-8") as handle:

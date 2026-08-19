@@ -84,6 +84,20 @@ class PublicCatalogClient(object):
             json.dump(value, handle, ensure_ascii=False, separators=(",", ":"))
         os.replace(tmp, path)
 
+    def _rollback_pending_generation(self):
+        pending_path = self._path("pending-previous.json")
+        if not os.path.exists(pending_path):
+            return
+        try:
+            with open(pending_path, "r", encoding="utf-8") as handle:
+                previous = json.loads(handle.read())
+            self._save_json(self._path("active.json"), previous)
+        finally:
+            try:
+                os.remove(pending_path)
+            except OSError:
+                pass
+
     def _activate_manifest(self, pointer, manifest, pointer_url, manifest_url, persist_active=False):
         if manifest.get("schema") != ROOT_SCHEMA or manifest.get("schema_version") != 1 or manifest.get("unclassified_exported") != 0:
             raise PublicCatalogError("Verejný katalóg má neplatnú schému")
@@ -166,10 +180,18 @@ class PublicCatalogClient(object):
             value = json.loads(gzip.decompress(raw).decode("utf-8"))
             self._objects[sha] = value
             if self._pending_activation:
+                active_path = self._path("active.json")
+                previous = None
+                if os.path.exists(active_path):
+                    with open(active_path, "r", encoding="utf-8") as handle:
+                        previous = json.loads(handle.read())
+                if previous and previous.get("pointer", {}).get("generation_id") != self._pointer.get("generation_id"):
+                    self._save_json(self._path("pending-previous.json"), previous)
                 self._save_json(self._path("active.json"), {"pointer": self._pointer, "manifest_url": self._manifest_url})
                 self._pending_activation = False
             return value
         except Exception as exc:
+            self._rollback_pending_generation()
             raise PublicCatalogError(str(exc))
 
     def categories(self):
