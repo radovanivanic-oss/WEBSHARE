@@ -41,10 +41,13 @@ function fixture(t) {
   media.run(20, "tv:20", "tmdb", "300954", "tv", "series", "결혼의 완성", "결혼의 완성", 2026, "2026-07-04", null, null, null, "plot", "[]", null, null, null, "[]", "[]", null, "[]", null, null, 0, "sk-SK", "matched", 0.99, null, "2026-01-01", 1);
   media.run(21, "episode:21", "tmdb", "300954:s1:e1", "episode", "series", "The Husband S01E01", null, 2026, null, 1, 1, 20, null, "[]", null, null, null, "[]", "[]", null, "[]", null, null, 0, null, "matched", 0.99, null, "2026-01-01", 1);
   media.run(30, "movie:30", null, null, "movie", "movies", "No playable variant", null, 2026, null, null, null, null, null, "[]", null, null, null, "[]", "[]", null, "[]", null, null, 0, null, null, null, null, "2026-01-01", 1);
+  media.run(31, "movie:31", null, null, "movie", "movies", "Inactive movie", null, 2026, null, null, null, null, null, "[]", null, null, null, "[]", "[]", null, "[]", null, null, 0, null, null, null, null, "2026-01-01", 0);
   db.prepare("INSERT INTO media_aliases VALUES(1,20,'The Completion of Marriage',NULL,'tmdb')").run();
   const file = db.prepare("INSERT INTO files VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   file.run(100, "movie-ident", "Inception.mkv", 100, "mkv", "1080p", "web", "h264", "aac", 0, 0, "[]", 0, 1, 1, 0, 0, 10, 1, 1);
   file.run(101, "episode-ident", "show S01E01.mkv", 100, "mkv", "1080p", "web", "h264", "aac", 0, 0, "[]", 0, 1, 1, 0, 0, 21, 1, 1);
+  file.run(102, "inactive-ident", "inactive.mkv", 100, "mkv", "1080p", "web", "h264", "aac", 0, 0, "[]", 0, 1, 1, 0, 0, 31, 1, 1);
+  file.run(103, "orphan-ident", "orphan.mkv", 100, "mkv", "1080p", "web", "h264", "aac", 0, 0, "[]", 0, 1, 1, 0, 0, 999999, 1, 1);
   db.close();
   return { dir, dbPath, output: path.join(dir, "out") };
 }
