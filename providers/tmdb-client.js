@@ -120,16 +120,26 @@ class TmdbClient {
   }
 
   async details(type, id) {
+    return (await this.detailsExact(type, id)).details;
+  }
+
+  async detailsExact(type, id) {
     const endpoint = type === "tv" ? `/tv/${id}` : `/movie/${id}`;
     const languages = [this.config.tmdbLanguage, ...this.config.tmdbFallbackLanguages]
       .filter((value, index, list) => value && list.indexOf(value) === index);
     let merged = null;
+    let selectedLanguage = null;
+    const languagesTried = [];
     for (const language of languages) {
+      languagesTried.push(language);
       const details = await this.request(endpoint, { append_to_response: "credits,alternative_titles" }, language);
       merged = mergeDetails(merged, details);
-      if (String(details.overview || "").trim()) break;
+      if (String(details.overview || "").trim()) {
+        selectedLanguage = language;
+        break;
+      }
     }
-    return merged;
+    return { details: merged, selectedLanguage, languagesTried };
   }
 }
 
