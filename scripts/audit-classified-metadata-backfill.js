@@ -115,7 +115,8 @@ async function liveSample(records, options, outputDir) {
       results.push({ ...record, state: evaluation.state, fields_to_fill: evaluation.fields_to_fill, selected_language: evaluation.selected_language, overview_digest: evaluation.overview_digest, overview_length: evaluation.overview ? evaluation.overview.length : 0, provider_year: evaluation.provider_year, issues: evaluation.issues, languages_tried: exact.languagesTried, provider_id_verified: String(exact.details?.id || "") === record.provider_id });
       values.push({ media_id: record.media_id, fields_to_fill: evaluation.fields_to_fill, overview: evaluation.overview, poster_url: evaluation.poster_url, backdrop_url: evaluation.backdrop_url, genres: evaluation.genres, release_date: evaluation.release_date, original_title: evaluation.original_title, selected_overview_language: evaluation.selected_language });
     } catch (error) {
-      results.push({ ...record, state: "RETRY_LATER", fields_to_fill: [], selected_language: null, overview_digest: null, overview_length: 0, provider_year: null, issues: [error.code || error.message], languages_tried: [], provider_id_verified: false });
+      const notFound = Number(error?.response?.status) === 404;
+      results.push({ ...record, state: notFound ? "NO_PROVIDER_METADATA" : "RETRY_LATER", fields_to_fill: [], selected_language: null, overview_digest: null, overview_length: 0, provider_year: null, issues: [notFound ? "PROVIDER_RECORD_NOT_FOUND" : (error.code || error.message)], languages_tried: [], provider_id_verified: false });
       values.push({ media_id: record.media_id, fields_to_fill: [], overview: null, poster_url: null, backdrop_url: null, genres: [], release_date: null, original_title: null, selected_overview_language: null });
     }
     writeJson(partialPath, { schema_version: 1, policy_version: POLICY_VERSION, configuration, results, values });
