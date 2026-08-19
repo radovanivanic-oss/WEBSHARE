@@ -17,6 +17,8 @@
   <category label="Streamy">
     <setting id="use_catalog_api" type="bool" label="Používať stránkované katalógové API" default="true"/>
     <setting id="catalog_api_url" type="text" label="URL katalógového API" default="http://192.168.2.226/api"/>
+    <setting id="use_static_catalog" type="bool" label="Používať verejný offline katalóg" default="false"/>
+    <setting id="public_catalog_url" type="text" label="URL verejného katalógového ukazovateľa" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/v1/current.json"/>
     <setting id="catalog_url" type="text" label="Katalóg všetko (.json.gz)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json.gz"/>
     <setting id="fallback_catalog_url" type="text" label="Záložný katalóg všetko (.json)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_all.json"/>
     <setting id="movie_catalog_url" type="text" label="Katalóg filmov (.json.gz)" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/videos_movies.json.gz"/>
@@ -87,7 +89,7 @@
   </category>
 
   <category label="Informácie">
-    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.8.15" enable="false"/>
+    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.8.16" enable="false"/>
     <setting id="catalog_status_info" type="text" label="Stav katalógu" default="Lokálny SQLite index" enable="false"/>
     <setting id="catalog_items_info" type="text" label="Počet indexovaných položiek" default="Pozri Nástroje / Katalóg" enable="false"/>
     <setting id="catalog_updated_info" type="text" label="Posledná aktualizácia" default="Pozri Nástroje / Katalóg" enable="false"/>

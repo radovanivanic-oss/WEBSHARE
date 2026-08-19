@@ -26,6 +26,8 @@
     "media:purge-unclassified:plan": "node scripts/plan-unclassified-purge.js",
     "media:purge-unclassified:apply": "node scripts/apply-unclassified-purge.js",
     "db:compact": "node scripts/compact-catalog.js",
+    "public-catalog:build": "node scripts/build-public-catalog.js",
+    "public-catalog:validate": "node scripts/validate-public-catalog.js",
     "metadata:enrich": "node scripts/enrich-metadata.js",
     "api:start": "node server/catalog-api.js",
     "publish:github": "node publish-exports.js",

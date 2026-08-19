@@ -14,6 +14,7 @@ import xbmcplugin
 
 from resources.lib.indexer import CatalogIndexer
 from resources.lib.catalog_api import CatalogApiClient, CatalogApiError
+from resources.lib.public_catalog import PublicCatalogClient, PublicCatalogError
 from resources.lib.store import AtlasStore
 from resources.lib.tmdb import TMDbClient, metadata_key
 from resources.lib.webshare import ResolverError, WebshareResolver
@@ -24,6 +25,7 @@ HANDLE = int(sys.argv[1])
 BASE_URL = sys.argv[0]
 PAGE_SIZE = 50
 CATALOG_BASE_URL = "https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog"
+PUBLIC_CATALOG_POINTER_URL = "https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/v1/current.json"
 DEFAULT_CATALOG_URL = CATALOG_BASE_URL + "/videos_all.json.gz"
 DEFAULT_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_all.json"
 DEFAULT_MOVIE_CATALOG_URL = CATALOG_BASE_URL + "/videos_movies.json.gz"
@@ -226,7 +228,17 @@ def use_catalog_api():
     return bool_setting("use_catalog_api", True)
 
 
+def use_static_catalog():
+    return bool_setting("use_static_catalog", False)
+
+
+def static_catalog():
+    return PublicCatalogClient(setting("public_catalog_url", PUBLIC_CATALOG_POINTER_URL))
+
+
 def catalog_api():
+    if use_static_catalog():
+        return static_catalog()
     return CatalogApiClient(setting("catalog_api_url", "http://192.168.2.226/api"))
 
 
@@ -300,7 +312,7 @@ def add_home_context(item, label, query):
 
 
 def root_menu():
-    if use_catalog_api():
+    if use_catalog_api() or use_static_catalog():
         api_root_menu()
         return
     hidden = store().hidden_home_keys()
@@ -337,6 +349,12 @@ def api_root_menu():
     add_directory("Vyhľadávanie", "api_search_menu")
     add_directory("Filmy", "api_movies")
     add_directory("Seriály", "api_series")
+    static_counts = None
+    if use_static_catalog():
+        try:
+            static_counts = {row.get("id"): int(row.get("count") or 0) for row in static_catalog().categories() if isinstance(row, dict)}
+        except CatalogApiError:
+            static_counts = {}
     for label, category in (
         ("Dokumentárne", "documentaries"),
         ("Koncerty", "concerts"),
@@ -347,6 +365,8 @@ def api_root_menu():
         ("Ostatné", "other"),
         ("Nezaradené", "unknown"),
     ):
+        if static_counts is not None and static_counts.get(category, 0) <= 0:
+            continue
         add_directory(label, "api_media", {"category": category, "sort": "recent"})
     add_directory("Obľúbené", "favorites")
     add_directory("História", "history")
