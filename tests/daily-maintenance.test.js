@@ -22,6 +22,7 @@ const {
   advanceSentinelState,
   applyVerificationResults,
   snapshotDatabase,
+  sha256,
   stableJson,
 } = require("../lib/daily-maintenance");
 
@@ -195,6 +196,13 @@ test("plan digest is deterministic for the same database snapshot and inputs", a
   assert.equal(first.plan_sha256, second.plan_sha256);
   assert.equal(stableJson(first.baseline), stableJson(second.baseline));
   db.close();
+});
+
+test("plan digest matches the persisted JSON representation when optional values are undefined", () => {
+  const value = { z: undefined, nested: { b: undefined, a: 1 }, list: [undefined, null, 2] };
+  const persisted = JSON.parse(JSON.stringify(value));
+  assert.equal(sha256(value), sha256(persisted));
+  assert.equal(stableJson(value), stableJson(persisted));
 });
 
 test("provider outage never becomes a deletion plan", async (t) => {
