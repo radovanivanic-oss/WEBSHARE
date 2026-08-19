@@ -21,7 +21,7 @@ const {
 const { getCatalogConfig } = require("../src/config/catalog-config");
 
 function parseArguments(argv) {
-  const options = { database: null, outputDir: null, provider: "tmdb", limit: 200, offset: 0, maxProviderRequests: 500, mode: "candidate-audit", dryRun: false, cacheDir: null };
+  const options = { database: null, outputDir: null, provider: "tmdb", limit: 200, offset: 0, maxProviderRequests: 500, mode: "candidate-audit", dryRun: false, cacheDir: null, resume: false };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--database") options.database = argv[++index];
@@ -32,6 +32,7 @@ function parseArguments(argv) {
     else if (value === "--max-provider-requests") options.maxProviderRequests = Number.parseInt(argv[++index], 10);
     else if (value === "--mode") options.mode = argv[++index] || "candidate-audit";
     else if (value === "--cache-dir") options.cacheDir = argv[++index];
+    else if (value === "--resume") options.resume = true;
     else if (value === "--dry-run") options.dryRun = true;
     else throw new Error(`Unknown argument: ${value}`);
   }
@@ -89,8 +90,22 @@ async function liveSample(records, options, outputDir) {
   const config = getCatalogConfig(process.env);
   const provider = loadProvider(options, config, outputDir);
   const selected = selectDeterministicSample(records, Math.min(options.limit, records.length)).slice(options.offset);
-  const results = [];
-  for (const record of selected) {
+  const selectedDigest = digest(selected.map((record) => record.media_id));
+  const configuration = { policy_version: POLICY_VERSION, selected_digest: selectedDigest, limit: options.limit, offset: options.offset, max_provider_requests: options.maxProviderRequests };
+  const checkpointPath = path.join(outputDir, "live-sample-checkpoint.json");
+  const partialPath = path.join(outputDir, "live-sample-results.partial.json");
+  let results = [];
+  let nextIndex = 0;
+  if (options.resume && fs.existsSync(checkpointPath)) {
+    const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, "utf8"));
+    if (JSON.stringify(checkpoint.configuration) !== JSON.stringify(configuration)) throw new Error("live sample checkpoint configuration mismatch");
+    const partial = JSON.parse(fs.readFileSync(partialPath, "utf8"));
+    if (!Array.isArray(partial.results) || partial.results.length !== checkpoint.next_index) throw new Error("live sample checkpoint result mismatch");
+    results = partial.results;
+    nextIndex = checkpoint.next_index;
+  }
+  for (let index = nextIndex; index < selected.length; index += 1) {
+    const record = selected[index];
     if (provider.counters.provider_requests >= options.maxProviderRequests) break;
     try {
       const exact = await provider.client.detailsExact(record.media_type, record.provider_id);
@@ -99,7 +114,23 @@ async function liveSample(records, options, outputDir) {
     } catch (error) {
       results.push({ ...record, state: "RETRY_LATER", fields_to_fill: [], selected_language: null, overview_digest: null, overview_length: 0, provider_year: null, issues: [error.code || error.message], languages_tried: [], provider_id_verified: false });
     }
+    writeJson(partialPath, { schema_version: 1, policy_version: POLICY_VERSION, configuration, results });
+    writeJson(checkpointPath, { schema_version: 1, policy_version: POLICY_VERSION, configuration, next_index: index + 1, provider_requests: provider.counters.provider_requests, cache_hits: provider.counters.cache_hits });
   }
+    const migrationPlan = results.filter((item) => item.state === "READY" && item.fields_to_fill.length > 0).map((item) => ({
+      media_id: item.media_id,
+      provider: item.provider,
+      provider_id: item.provider_id,
+      media_type: item.media_type,
+      category: item.category,
+      active: item.active,
+      fields_to_fill: item.fields_to_fill,
+      selected_overview_language: item.selected_language,
+      overview_digest: item.overview_digest,
+      evidence_digest: digest({ policy_version: POLICY_VERSION, media_id: item.media_id, provider: item.provider, provider_id: item.provider_id, fields_to_fill: item.fields_to_fill, selected_language: item.selected_language, overview_digest: item.overview_digest }),
+      policy_version: POLICY_VERSION,
+    })).sort((a, b) => a.media_id - b.media_id);
+  writeJson(path.join(outputDir, "metadata-migration-plan.json"), { schema_version: 1, policy_version: POLICY_VERSION, provider: options.provider, source: "bounded-live-sample", candidate_count: migrationPlan.length, records: migrationPlan, deterministic_sha256: digest(migrationPlan) });
   const summary = {
     sample_size: selected.length,
     processed: results.length,
@@ -109,7 +140,10 @@ async function liveSample(records, options, outputDir) {
     languages: Object.fromEntries([...new Set(results.map((item) => item.selected_language).filter(Boolean))].sort().map((language) => [language, results.filter((item) => item.selected_language === language).length])),
     wrong_provider_identity: results.filter((item) => item.provider_id_verified === false && item.state !== "RETRY_LATER").length,
     provider: provider.counters,
+    configuration,
     sample_digest: digest(results.map((item) => ({ media_id: item.media_id, state: item.state, fields_to_fill: item.fields_to_fill, selected_language: item.selected_language, overview_digest: item.overview_digest, issues: item.issues })).sort((a, b) => a.media_id - b.media_id)),
+    migration_plan_count: migrationPlan.length,
+    migration_plan_sha256: digest(migrationPlan),
   };
   writeJson(path.join(outputDir, "live-sample-results.json"), results);
   writeJson(path.join(outputDir, "live-sample-summary.json"), summary);
@@ -125,7 +159,7 @@ async function run(options) {
     const overviewEligible = rows.map(buildOverviewEligibility).filter(Boolean);
     const allEligible = rows.map(buildEligibilityRecord).filter(Boolean);
     const plan = { schema_version: 1, policy_version: POLICY_VERSION, provider: options.provider, database_read_only: true, candidate_count: allEligible.length, overview_candidate_count: overviewEligible.length, records: allEligible };
-    const summary = { schema_version: 1, policy_version: POLICY_VERSION, provider: options.provider, sqlite_write_performed: false, domains, canonical_entities: rows.length, active_canonical_entities: rows.filter((row) => row.is_active).length, eligible_for_any_missing_field: allEligible.length, eligible_missing_overview: overviewEligible.length, eligible_missing_overview_by_domain: Object.fromEntries(["movie", "tv"].map((type) => [type, overviewEligible.filter((row) => row.media_type === type).length])), deterministic_plan_sha256: deterministicPlanDigest(allEligible), overview_plan_sha256: deterministicPlanDigest(overviewEligible), selected_mode: options.mode, dry_run: true };
+    const summary = { schema_version: 1, policy_version: POLICY_VERSION, provider: options.provider, sqlite_write_performed: false, domains, canonical_entities: rows.length, active_canonical_entities: rows.filter((row) => row.is_active).length, eligible_for_any_missing_field: allEligible.length, eligible_for_any_missing_field_active: allEligible.filter((row) => row.active).length, eligible_missing_overview: overviewEligible.length, eligible_missing_overview_active: overviewEligible.filter((row) => row.active).length, eligible_missing_overview_by_domain: Object.fromEntries(["movie", "tv"].map((type) => [type, overviewEligible.filter((row) => row.media_type === type).length])), eligible_missing_overview_active_by_domain: Object.fromEntries(["movie", "tv"].map((type) => [type, overviewEligible.filter((row) => row.media_type === type && row.active).length])), overview_missing_without_trusted_provider_by_domain: Object.fromEntries(["movie", "tv"].map((type) => [type, rows.filter((row) => row.media_type === type && !String(row.overview || "").trim() && !isTrustedProviderIdentity(row)).length])), deterministic_plan_sha256: deterministicPlanDigest(allEligible), overview_plan_sha256: deterministicPlanDigest(overviewEligible), selected_mode: options.mode, dry_run: true };
     writeJson(path.join(options.outputDir, "candidate-plan.json"), plan);
     writeJson(path.join(options.outputDir, "audit-summary.json"), summary);
     writeJson(path.join(options.outputDir, "audit-manifest.json"), { policy_version: POLICY_VERSION, candidate_plan_sha256: summary.deterministic_plan_sha256, overview_plan_sha256: summary.overview_plan_sha256, generated_at: new Date().toISOString(), sqlite_write_performed: false });

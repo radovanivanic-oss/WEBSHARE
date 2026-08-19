@@ -8,6 +8,12 @@ const {
   isTrustedProviderIdentity,
   selectDeterministicSample,
 } = require("../lib/classified-metadata-backfill");
+const { TmdbClient } = require("../providers/tmdb-client");
+const { createMetadataFileCache } = require("../lib/metadata-file-cache");
+const { getCatalogConfig } = require("../src/config/catalog-config");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 function row(extra = {}) {
   return {
@@ -54,4 +60,25 @@ test("sample selection and plan digest are deterministic", () => {
   const records = [row({ id: 3, title: "Latin" }), row({ id: 2, title: "결혼의 완성", media_type: "tv", category: "series" }), row({ id: 1, title: "嫁入高门" })];
   assert.deepEqual(selectDeterministicSample(records, 3).map((item) => item.id), selectDeterministicSample([...records].reverse(), 3).map((item) => item.id));
   assert.equal(deterministicPlanDigest(records), deterministicPlanDigest([...records].reverse()));
+});
+
+test("exact-ID client uses the isolated cache and reports selected language", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "webshare-b41-cache-"));
+  try {
+    const cache = createMetadataFileCache({ root: directory, provider: "tmdb", version: "B41-test-v1", ttlDays: 1 });
+    const config = getCatalogConfig({ TMDB_API_KEY: "fixture", TMDB_LANGUAGE: "sk-SK", TMDB_FALLBACK_LANGUAGES: "cs-CZ,en-US", TMDB_REQUEST_DELAY_MS: "0" });
+    const client = new TmdbClient(config, null, { warn() {} }, { cacheStore: cache, minRequestIntervalMs: 0 });
+    let calls = 0;
+    client.client.get = async (_endpoint, request) => {
+      calls += 1;
+      return { status: 200, data: { id: 1202033, title: "Enola Holmes 3", original_title: "Enola Holmes 3", release_date: "2026-06-30", overview: request.params.language === "en-US" ? "English provider overview." : "" } };
+    };
+    const first = await client.detailsExact("movie", "1202033");
+    const second = await client.detailsExact("movie", "1202033");
+    assert.equal(first.selectedLanguage, "en-US");
+    assert.equal(second.selectedLanguage, "en-US");
+    assert.equal(calls, 3);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
