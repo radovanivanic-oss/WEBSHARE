@@ -111,7 +111,7 @@ async function liveSample(records, options, outputDir) {
     if (provider.counters.provider_requests >= options.maxProviderRequests) break;
     try {
       const exact = await provider.client.detailsExact(record.media_type, record.provider_id);
-      const evaluation = evaluateProviderMetadata(record, exact.details, exact.selectedLanguage);
+      const evaluation = evaluateProviderMetadata(record._sourceRow || record, exact.details, exact.selectedLanguage);
       results.push({ ...record, state: evaluation.state, fields_to_fill: evaluation.fields_to_fill, selected_language: evaluation.selected_language, overview_digest: evaluation.overview_digest, overview_length: evaluation.overview ? evaluation.overview.length : 0, provider_year: evaluation.provider_year, issues: evaluation.issues, languages_tried: exact.languagesTried, provider_id_verified: String(exact.details?.id || "") === record.provider_id });
       values.push({ media_id: record.media_id, fields_to_fill: evaluation.fields_to_fill, overview: evaluation.overview, poster_url: evaluation.poster_url, backdrop_url: evaluation.backdrop_url, genres: evaluation.genres, release_date: evaluation.release_date, original_title: evaluation.original_title, selected_overview_language: evaluation.selected_language });
     } catch (error) {

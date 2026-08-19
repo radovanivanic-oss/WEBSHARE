@@ -51,6 +51,16 @@ test("exact provider metadata fills only missing fields", () => {
   assert.equal(result.poster_url, null);
 });
 
+test("overview eligibility preserves the source row for fill-missing-only evaluation", () => {
+  const eligible = buildOverviewEligibility(row());
+  const result = evaluateProviderMetadata(eligible._sourceRow, {
+    id: 1202033, title: "Enola Holmes 3", original_title: "Enola Holmes 3",
+    release_date: "2026-06-30", overview: "A sufficiently long provider description.",
+    poster_path: "/poster.jpg", backdrop_path: "/backdrop.jpg", genres: [{ id: 12, name: "Adventure" }],
+  }, "en-US");
+  assert.deepEqual(result.fields_to_fill, ["overview"]);
+});
+
 test("provider type, ID, year, and title conflicts are rejected", () => {
   const result = evaluateProviderMetadata(row(), { id: 99, name: "Different Show", first_air_date: "2010-01-01" }, "en-US");
   assert.equal(result.state, "CONFLICTING");
