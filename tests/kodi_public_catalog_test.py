@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import types
@@ -61,6 +62,23 @@ class PublicCatalogTests(unittest.TestCase):
         client._get = lambda url: b"not-gzip"
         with self.assertRaises(PublicCatalogError):
             client._object({"sha256": hashlib.sha256(b"expected").hexdigest()})
+
+    def test_invalid_new_generation_keeps_last_active_generation(self):
+        client = self.client()
+        old_pointer = {"generation_id": "old", "manifest_path": "generations/old/manifest.json"}
+        old_manifest = dict(client._manifest, generation_id="old")
+        client._save_json(client._path("generations/old/manifest.json"), old_manifest)
+        client._save_json(client._path("active.json"), {"pointer": old_pointer, "manifest_url": "https://catalog.example/generations/old/manifest.json"})
+        new_manifest = {"schema": "webshare-atlas-public-catalog/v1", "schema_version": 1, "generation_id": "new", "unclassified_exported": 0, "categories": [], "files": {"shards": []}, "episodes": {"shards": []}}
+        new_raw = (json.dumps(new_manifest, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        new_pointer = {"schema": "webshare-atlas-public-catalog-current/v1", "schema_version": 1, "generation_id": "new", "manifest_path": "generations/new/manifest.json", "manifest_sha256": hashlib.sha256(new_raw).hexdigest()}
+        responses = [json.dumps(new_pointer).encode("utf-8"), new_raw]
+        client._get = lambda url: responses.pop(0) if responses else b"not-gzip"
+        client.refresh()
+        with self.assertRaises(PublicCatalogError):
+            client._object({"sha256": hashlib.sha256(b"expected").hexdigest()})
+        active = json.loads(open(os.path.join(client.cache_root, "active.json"), "r", encoding="utf-8").read())
+        self.assertEqual(active["pointer"]["generation_id"], "old")
 
 
 if __name__ == "__main__":

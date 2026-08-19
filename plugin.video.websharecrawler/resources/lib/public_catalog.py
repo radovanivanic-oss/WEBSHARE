@@ -25,8 +25,6 @@ def _tokens(value):
     result = []
     for raw in TOKEN_RE.findall(value or ""):
         # Preserve native scripts; strip accents only from Latin tokens.
-        if any("LATIN" in "" for _ in ()):  # pragma: no cover - keeps Python 3.0 syntax simple
-            pass
         folded = raw.casefold()
         if all("a" <= char.lower() <= "z" or char in "áäčďéíĺľňóôŕšťúýžÁÄČĎÉÍĹĽŇÓÔŔŠŤÚÝŽ" for char in raw):
             import unicodedata
@@ -52,6 +50,7 @@ class PublicCatalogClient(object):
         self._pointer = None
         self._records = {}
         self._objects = {}
+        self._pending_activation = False
 
     def _path(self, name):
         path = os.path.join(self.cache_root, name)
@@ -81,7 +80,7 @@ class PublicCatalogClient(object):
             json.dump(value, handle, ensure_ascii=False, separators=(",", ":"))
         os.replace(tmp, path)
 
-    def _activate_manifest(self, pointer, manifest, pointer_url, manifest_url):
+    def _activate_manifest(self, pointer, manifest, pointer_url, manifest_url, persist_active=False):
         if manifest.get("schema") != ROOT_SCHEMA or manifest.get("schema_version") != 1 or manifest.get("unclassified_exported") != 0:
             raise PublicCatalogError("Verejný katalóg má neplatnú schému")
         if pointer.get("manifest_sha256") and _sha256(json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) != pointer.get("manifest_sha256"):
@@ -93,14 +92,16 @@ class PublicCatalogClient(object):
         self._manifest_url = manifest_url
         self._pointer_url = pointer_url
         self._save_json(self._path("generations/{}/manifest.json".format(manifest["generation_id"])), manifest)
-        self._save_json(self._path("active.json"), {"pointer": pointer, "manifest_url": manifest_url})
+        self._pending_activation = not persist_active
+        if persist_active:
+            self._save_json(self._path("active.json"), {"pointer": pointer, "manifest_url": manifest_url})
 
     def refresh(self):
         try:
             pointer = self._load_json_url(self.pointer_url)
             if pointer.get("schema") != "webshare-atlas-public-catalog-current/v1":
                 raise PublicCatalogError("Neplatný verejný katalógový ukazovateľ")
-            manifest_url = urljoin(self.pointer_url + "/", pointer.get("manifest_path", ""))
+            manifest_url = urljoin(self.pointer_url, pointer.get("manifest_path", ""))
             raw_manifest = self._get(manifest_url)
             if pointer.get("manifest_sha256") and _sha256(raw_manifest) != pointer.get("manifest_sha256"):
                 raise PublicCatalogError("Kontrolný súčet verejného manifestu nesedí")
@@ -108,6 +109,8 @@ class PublicCatalogClient(object):
                 manifest = json.loads(raw_manifest.decode("utf-8"))
             except Exception as exc:
                 raise PublicCatalogError("Verejný manifest nie je JSON: {}".format(exc))
+            # Keep the last known-good generation active until at least one new
+            # object has passed hash, gzip and JSON validation.
             self._activate_manifest(pointer, manifest, self.pointer_url, manifest_url)
             return manifest
         except Exception as exc:
@@ -119,6 +122,8 @@ class PublicCatalogClient(object):
                     self._pointer = active["pointer"]
                     self._manifest = manifest
                     self._manifest_url = active["manifest_url"]
+                    self._pointer_url = self.pointer_url
+                    self._pending_activation = False
                     return manifest
                 except Exception:
                     pass
@@ -154,12 +159,16 @@ class PublicCatalogClient(object):
                 os.replace(tmp, cached)
             value = json.loads(gzip.decompress(raw).decode("utf-8"))
             self._objects[sha] = value
+            if self._pending_activation:
+                self._save_json(self._path("active.json"), {"pointer": self._pointer, "manifest_url": self._manifest_url})
+                self._pending_activation = False
             return value
         except Exception as exc:
             raise PublicCatalogError(str(exc))
 
     def categories(self):
-        return [{"id": row["category"], "title": row["category"], "count": row["record_count"]} for row in self._ensure_manifest().get("categories", [])]
+        labels = {"movies": "Filmy", "series": "Seriály", "concerts": "Koncerty", "sports": "Šport", "music-videos": "Hudobné videá", "other": "Ostatné"}
+        return [{"id": row["category"], "title": labels.get(row["category"], row["category"]), "count": row["record_count"]} for row in self._ensure_manifest().get("categories", [])]
 
     def _category_records(self, category):
         if category in self._records:
@@ -184,8 +193,11 @@ class PublicCatalogClient(object):
         return all(token in haystack for token in query_tokens)
 
     def media(self, **params):
-        category = params.get("category") or "movies"
-        rows = list(self._category_records(category))
+        category = params.get("category")
+        categories = [category] if category else [row.get("category") for row in self._ensure_manifest().get("categories", [])]
+        rows = []
+        for category_name in categories:
+            rows.extend(self._category_records(category_name))
         query = params.get("query") or params.get("q")
         if query:
             rows = [row for row in rows if self._matches(row, query)]
@@ -220,6 +232,10 @@ class PublicCatalogClient(object):
             for row in self._category_records(category):
                 if int(row.get("id") or 0) == int(media_id):
                     return row
+        group = self._range_item("episodes", media_id)
+        for episode in (group or {}).get("episodes", []):
+            if int(episode.get("id") or 0) == int(media_id):
+                return episode
         return None
 
     def detail(self, media_id):

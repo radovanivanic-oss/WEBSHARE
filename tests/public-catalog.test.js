@@ -62,6 +62,19 @@ test("builds and validates a deterministic public media/series/files read model"
   assert.ok(manifest.categories.find(x => x.category === "series").record_count === 1);
 });
 
+test("fixed-generation manifests and objects are deterministic", t => {
+  const f = fixture(t);
+  const first = buildPublicCatalog({ database: f.dbPath, outputDir: path.join(f.dir, "one"), generationId: "same-generation" });
+  const second = buildPublicCatalog({ database: f.dbPath, outputDir: path.join(f.dir, "two"), generationId: "same-generation" });
+  const oneManifest = fs.readFileSync(path.join(first.root, "generations", "same-generation", "manifest.json"));
+  const twoManifest = fs.readFileSync(path.join(second.root, "generations", "same-generation", "manifest.json"));
+  assert.deepEqual(oneManifest, twoManifest);
+  assert.deepEqual(
+    fs.readdirSync(path.join(first.root, "generations", "same-generation", "objects")).sort(),
+    fs.readdirSync(path.join(second.root, "generations", "same-generation", "objects")).sort(),
+  );
+});
+
 test("rejects a tampered content-addressed public object", t => {
   const f = fixture(t);
   const result = buildPublicCatalog({ database: f.dbPath, outputDir: f.output, generationId: "fixture-2" });
