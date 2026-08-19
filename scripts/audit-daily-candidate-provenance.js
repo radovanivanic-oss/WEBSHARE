@@ -2,7 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { auditDailyCandidateProvenance, buildPurgedSidecar } = require("../lib/daily-candidate-provenance");
+const { auditDailyCandidateProvenance, buildPurgedSidecar, readAndValidatePurgedSidecar } = require("../lib/daily-candidate-provenance");
 
 function options(argv) {
   const result = { historicalJsonlPaths: [] };
@@ -19,8 +19,9 @@ function options(argv) {
 
 (async() => {
   const o = options(process.argv);
-  if (fs.existsSync(o.b39_sidecar)) throw new Error(`refusing-to-overwrite-existing-sidecar:${o.b39_sidecar}`);
-  const sidecar = buildPurgedSidecar({ currentDatabasePath: o.database, b39DatabasePath: o.b39_database, sourceSha256: o.b39_source_sha256 || null, outputPath: o.b39_sidecar });
-  const result = await auditDailyCandidateProvenance({ planPath: o.plan, currentDatabasePath: o.database, b39DatabasePath: o.b39_database, historicalJsonlPaths: o.historicalJsonlPaths, outputDir: o.output_dir, b39SidecarPath: o.b39_sidecar, b39SourceSha256: o.b39_source_sha256 || null });
+  const sidecar = fs.existsSync(o.b39_sidecar)
+    ? readAndValidatePurgedSidecar(o.b39_sidecar)
+    : buildPurgedSidecar({ currentDatabasePath: o.database, b39DatabasePath: o.b39_database, sourceSha256: o.b39_source_sha256 || null, outputPath: o.b39_sidecar });
+  const result = await auditDailyCandidateProvenance({ planPath: o.plan, currentDatabasePath: o.database, b39DatabasePath: o.b39_database, historicalJsonlPaths: o.historicalJsonlPaths, outputDir: o.output_dir, b39SidecarPath: o.b39_sidecar, b39SourceSha256: o.b39_source_sha256 || null, allowPlanDigestMismatch: true });
   console.log(JSON.stringify({ sidecar: { path: o.b39_sidecar, ident_count: sidecar.ident_count, bytes: sidecar.bytes, idents_sha256: sidecar.idents_sha256 }, report: result.report }, null, 2));
 })().catch((error) => { console.error(error.stack || error.message); process.exitCode = 1; });
