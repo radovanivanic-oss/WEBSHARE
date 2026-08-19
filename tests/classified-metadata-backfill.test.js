@@ -14,6 +14,8 @@ const { getCatalogConfig } = require("../src/config/catalog-config");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const Database = require("better-sqlite3");
+const { apply: applyBackfill, digest: backfillDigest } = require("../scripts/apply-classified-metadata-backfill");
 
 function row(extra = {}) {
   return {
@@ -78,6 +80,41 @@ test("exact-ID client uses the isolated cache and reports selected language", as
     assert.equal(first.selectedLanguage, "en-US");
     assert.equal(second.selectedLanguage, "en-US");
     assert.equal(calls, 3);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("controlled metadata apply writes only reviewed missing fields and preserves catalog counts", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "webshare-b42-apply-"));
+  const databasePath = path.join(directory, "catalog.sqlite");
+  const planPath = path.join(directory, "plan.json");
+  const valuesPath = path.join(directory, "values.json");
+  const backupPath = path.join(directory, "backup.sqlite");
+  try {
+    const db = new Database(databasePath);
+    db.exec(`
+      CREATE TABLE media (
+        id INTEGER PRIMARY KEY, media_type TEXT, category TEXT, external_source TEXT, external_id TEXT,
+        metadata_status TEXT, metadata_confidence REAL, overview TEXT, poster_url TEXT, backdrop_url TEXT,
+        genres_json TEXT, release_date TEXT, original_title TEXT, metadata_language TEXT,
+        metadata_updated_at TEXT, updated_at TEXT, is_active INTEGER
+      );
+      CREATE TABLE files (id INTEGER PRIMARY KEY, is_active INTEGER, is_playable_video INTEGER, media_id INTEGER);
+      INSERT INTO media VALUES (1,'movie','movies','tmdb','10','matched',0.99,NULL,'poster','backdrop','[]','2020-01-01','Title',NULL,NULL,'before',1);
+      INSERT INTO files VALUES (1,1,1,1);
+    `);
+    db.close();
+    const records = [{ media_id: 1, provider: "tmdb", provider_id: "10", media_type: "movie", category: "movies", fields_to_fill: ["overview"], policy_version: "test" }];
+    const values = [{ media_id: 1, fields_to_fill: ["overview"], overview: "Provider description", poster_url: null, backdrop_url: null, genres: [], release_date: null, original_title: null, selected_overview_language: "en-US" }];
+    fs.writeFileSync(planPath, JSON.stringify({ records, deterministic_sha256: backfillDigest(records) }));
+    fs.writeFileSync(valuesPath, JSON.stringify({ records: values, deterministic_sha256: backfillDigest(values) }));
+    await applyBackfill({ database: databasePath, plan: planPath, values: valuesPath, expectedPlanSha256: backfillDigest(records), expectedValuesSha256: backfillDigest(values), backup: backupPath, outputDir: path.join(directory, "evidence"), apply: true });
+    const after = new Database(databasePath, { readonly: true });
+    assert.equal(after.prepare("SELECT overview FROM media WHERE id=1").get().overview, "Provider description");
+    assert.equal(after.prepare("SELECT COUNT(*) n FROM media").get().n, 1);
+    assert.equal(after.prepare("SELECT COUNT(*) n FROM files").get().n, 1);
+    after.close();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
