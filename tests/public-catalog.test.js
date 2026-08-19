@@ -40,6 +40,7 @@ function fixture(t) {
   media.run(10, "movie:10", "tmdb", "27205", "movie", "movies", "Počiatok", "Inception", 2010, "2010-07-15", null, null, null, "plot", "[]", null, null, null, "[]", "[]", null, "[]", null, null, 0, "sk-SK", "matched", 0.99, null, "2026-01-01", 1);
   media.run(20, "tv:20", "tmdb", "300954", "tv", "series", "결혼의 완성", "결혼의 완성", 2026, "2026-07-04", null, null, null, "plot", "[]", null, null, null, "[]", "[]", null, "[]", null, null, 0, "sk-SK", "matched", 0.99, null, "2026-01-01", 1);
   media.run(21, "episode:21", "tmdb", "300954:s1:e1", "episode", "series", "The Husband S01E01", null, 2026, null, 1, 1, 20, null, "[]", null, null, null, "[]", "[]", null, "[]", null, null, 0, null, "matched", 0.99, null, "2026-01-01", 1);
+  media.run(30, "movie:30", null, null, "movie", "movies", "No playable variant", null, 2026, null, null, null, null, null, "[]", null, null, null, "[]", "[]", null, "[]", null, null, 0, null, null, null, null, "2026-01-01", 1);
   db.prepare("INSERT INTO media_aliases VALUES(1,20,'The Completion of Marriage',NULL,'tmdb')").run();
   const file = db.prepare("INSERT INTO files VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   file.run(100, "movie-ident", "Inception.mkv", 100, "mkv", "1080p", "web", "h264", "aac", 0, 0, "[]", 0, 1, 1, 0, 0, 10, 1, 1);
@@ -61,6 +62,11 @@ test("builds and validates a deterministic public media/series/files read model"
   assert.equal(manifest.source_schema_version, 9);
   assert.equal(manifest.build_source_commit, "fixture-commit");
   assert.ok(manifest.categories.find(x => x.category === "series").record_count === 1);
+  const movieShard = manifest.categories.find(x => x.category === "movies").shards[0].sha256;
+  const movies = JSON.parse(require("zlib").gunzipSync(fs.readFileSync(path.join(result.root, "generations", "fixture-1", "objects", movieShard + ".json.gz"))).toString("utf8"));
+  assert.deepEqual(movies.map(row => row.id), [10]);
+  assert.equal(movies[0].available_files_count, 1);
+  assert.equal(movies[0].variant_count, 1);
 });
 
 test("fixed-generation manifests and objects are deterministic", t => {

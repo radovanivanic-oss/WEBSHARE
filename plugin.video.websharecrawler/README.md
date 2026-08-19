@@ -1,23 +1,21 @@
 # Webshare Atlas Kodi Addon
 
-## Katalógové API
+## Verejný statický katalóg
 
-Od verzie 0.8.0 môže addon namiesto veľkých JSON súborov používať stránkované serverové API, premiérové novinky a serverové live metadata.
+Webshare Atlas od verzie 0.8.18 predvolene používa verejný, verzovaný katalóg distribuovaný cez GitHub. Súkromný server preto nie je potrebný na navigáciu, vyhľadávanie ani načítanie metadata.
 
-V nastaveniach zapni `Používať stránkované katalógové API` a nastav napríklad:
+Katalóg je odvodený read model. Obsahuje iba metadata, verejné identy súborov a vzťahy seriál → séria → epizóda → variant. Neobsahuje WST, prihlasovacie údaje ani vyriešené stream URL.
 
-```text
-http://192.168.2.226/api
-```
+V nastaveniach stačí ponechať zapnuté `Používať verejný katalóg`. Interný API fallback a URL override sú dostupné iba v sekcii Expert / Vývojár.
 
-Pri vypnutom API režime zostáva aktívny pôvodný JSON/SQLite workflow. Webshare login a `api/file_link` resolver zostávajú v Kodi a server nikdy neposiela WST token.
+Webshare login a `api/file_link` resolver zostávajú v Kodi. Pri prehrávaní sa stále používa priame Webshare spojenie.
 
 Webshare Atlas je Kodi video addon nad lokálnym exportom z Webshare crawlera.
 
 Crawler ostáva oddelený:
 
-- crawler vytvára iba katalóg `videos_all.json` a `videos_all.json.gz`
-- addon robí lokálny index, menu, listing, históriu, obľúbené a resolver pri kliknutí
+- crawler vytvára privátny autoritatívny katalóg a exportovateľný statický read model
+- addon sťahuje a overuje iba verejnú generáciu, potom používa lokálnu cache, menu, listing, históriu, obľúbené a resolver pri kliknutí
 - stream URL sa nikdy neukladá do hlavného katalógu
 
 ## Architektúra
@@ -37,7 +35,7 @@ Catalog
 - `addon.xml` - Kodi manifest a service registrácia.
 - `default.py` - menu, routing, listing, context menu a play flow.
 - `service.py` - priebežné ukladanie pozície počas prehrávania.
-- `resources/settings.xml` - URL katalógu, Webshare login, TTL a stránkovanie.
+- `resources/settings.xml` - verejný katalóg, Webshare login, TTL a stránkovanie; legacy URL override je iba v Expert / Vývojár.
 - `resources/lib/catalog.py` - načítanie `.json.gz` alebo `.json`.
 - `resources/lib/indexer.py` - prvé indexovanie a preindexovanie katalógu.
 - `resources/lib/metadata.py` - odvodenie typu, kvality, roku, jazyka a epizód z názvu.
@@ -61,25 +59,16 @@ Katalóg
 Nastavenia
 ```
 
-## Indexovanie
+## Lokálna cache
 
-Pri prvom otvorení addon vytvorí SQLite index v Kodi profile.
+Pri prvom otvorení addon overí pointer, manifest, SHA-256 a gzip objektov a uloží platnú generáciu do Kodi profilu. Pri nedostupnosti GitHubu ponechá poslednú platnú generáciu.
 
-Indexuje:
+Lokálna cache obsahuje:
 
-- ident
-- názov
-- typ: film / epizóda
-- rok
-- kvalitu: 2160p / 1080p / 720p / SD / neznáma
-- jazyk: CZ / SK / CZ/SK / EN / Multi / neznámy
-- dabing/titulky: CZ dabing / SK dabing / titulky / neznáme
-- žáner: zatiaľ placeholder podľa dostupných dát, inak neznáme
-- seriálový názov
-- sériu a epizódu
-- veľkosť
-- zdroj
-- fulltextové pole
+- root media záznamy rozdelené podľa kategórie
+- lokálny tokenový vyhľadávací index
+- série, sezóny, epizódy a hrateľné varianty
+- ident, názov, kvalita, jazyk, veľkosť a metadata pre zobrazenie
 
 Žáner zatiaľ nie je indexovaný, lebo aktuálny crawler katalóg ho nedodáva spoľahlivo.
 
@@ -98,10 +87,10 @@ ident
 Priame download URL sa nepoužívajú; stream sa odovzdáva iba po
 úspešnom `file_link` resolveri.
 
-## Default nastavenia
+## Predvolené nastavenia
 
-- primárny katalóg: `http://192.168.2.226/videos_all.json.gz`
-- fallback katalóg: `http://192.168.2.226/videos_all.json`
+- verejný statický katalóg: zapnutý
+- Ubuntu/API URL: nie je potrebná pre bežnú prevádzku
 - resolver cache TTL: 6 hodín
 - stránkovanie: 50 položiek
 

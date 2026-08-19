@@ -44,79 +44,59 @@ DEFAULT_MUSIC_CATALOG_URL = CATALOG_BASE_URL + "/videos_music.json.gz"
 DEFAULT_MUSIC_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_music.json"
 DEFAULT_OTHER_CATALOG_URL = CATALOG_BASE_URL + "/videos_other.json.gz"
 DEFAULT_OTHER_FALLBACK_CATALOG_URL = CATALOG_BASE_URL + "/videos_other.json"
-OLD_CATALOG_URL = "http://192.168.2.226/videos_all.json.gz"
-OLD_FALLBACK_CATALOG_URL = "http://192.168.2.226/videos_all.json"
 _STATIC_CATALOG = None
 
 CATALOG_SCOPES = {
     "all": {
         "label": "Všetko",
-        "primary_setting": "catalog_url",
-        "fallback_setting": "fallback_catalog_url",
         "primary_default": DEFAULT_CATALOG_URL,
         "fallback_default": DEFAULT_FALLBACK_CATALOG_URL,
         "media_type": None,
     },
     "movie": {
         "label": "Filmy",
-        "primary_setting": "movie_catalog_url",
-        "fallback_setting": "movie_fallback_catalog_url",
         "primary_default": DEFAULT_MOVIE_CATALOG_URL,
         "fallback_default": DEFAULT_MOVIE_FALLBACK_CATALOG_URL,
         "media_type": "movie",
     },
     "series": {
         "label": "Seriály",
-        "primary_setting": "series_catalog_url",
-        "fallback_setting": "series_fallback_catalog_url",
         "primary_default": DEFAULT_SERIES_CATALOG_URL,
         "fallback_default": DEFAULT_SERIES_FALLBACK_CATALOG_URL,
         "media_type": "episode",
     },
     "documentary": {
         "label": "Dokumenty",
-        "primary_setting": "documentary_catalog_url",
-        "fallback_setting": "documentary_fallback_catalog_url",
         "primary_default": DEFAULT_DOCUMENTARY_CATALOG_URL,
         "fallback_default": DEFAULT_DOCUMENTARY_FALLBACK_CATALOG_URL,
         "media_type": None,
     },
     "sport": {
         "label": "Šport",
-        "primary_setting": "sport_catalog_url",
-        "fallback_setting": "sport_fallback_catalog_url",
         "primary_default": DEFAULT_SPORT_CATALOG_URL,
         "fallback_default": DEFAULT_SPORT_FALLBACK_CATALOG_URL,
         "media_type": None,
     },
     "kids": {
         "label": "Detské",
-        "primary_setting": "kids_catalog_url",
-        "fallback_setting": "kids_fallback_catalog_url",
         "primary_default": DEFAULT_KIDS_CATALOG_URL,
         "fallback_default": DEFAULT_KIDS_FALLBACK_CATALOG_URL,
         "media_type": None,
     },
     "anime": {
         "label": "Anime",
-        "primary_setting": "anime_catalog_url",
-        "fallback_setting": "anime_fallback_catalog_url",
         "primary_default": DEFAULT_ANIME_CATALOG_URL,
         "fallback_default": DEFAULT_ANIME_FALLBACK_CATALOG_URL,
         "media_type": None,
     },
     "music": {
         "label": "Hudba",
-        "primary_setting": "music_catalog_url",
-        "fallback_setting": "music_fallback_catalog_url",
         "primary_default": DEFAULT_MUSIC_CATALOG_URL,
         "fallback_default": DEFAULT_MUSIC_FALLBACK_CATALOG_URL,
         "media_type": None,
     },
     "other": {
         "label": "Ostatné",
-        "primary_setting": "other_catalog_url",
-        "fallback_setting": "other_fallback_catalog_url",
         "primary_default": DEFAULT_OTHER_CATALOG_URL,
         "fallback_default": DEFAULT_OTHER_FALLBACK_CATALOG_URL,
         "media_type": None,
@@ -175,17 +155,9 @@ def catalog_scope_config(scope):
 
 def indexer(scope="all"):
     config = catalog_scope_config(scope)
-    catalog_url = setting(config["primary_setting"], config["primary_default"])
-    fallback_catalog_url = setting(config["fallback_setting"], config["fallback_default"])
-    if catalog_url == OLD_CATALOG_URL:
-        catalog_url = config["primary_default"]
-        ADDON.setSetting(config["primary_setting"], catalog_url)
-    if fallback_catalog_url == OLD_FALLBACK_CATALOG_URL:
-        fallback_catalog_url = config["fallback_default"]
-        ADDON.setSetting(config["fallback_setting"], fallback_catalog_url)
     return CatalogIndexer(
-        catalog_url=catalog_url,
-        fallback_catalog_url=fallback_catalog_url,
+        catalog_url=config["primary_default"],
+        fallback_catalog_url=config["fallback_default"],
         catalog_key=scope,
         media_type=config["media_type"],
     )
@@ -226,11 +198,20 @@ def fallback_art():
 
 
 def use_catalog_api():
-    return bool_setting("use_catalog_api", True)
+    return bool_setting("use_catalog_api", False)
 
 
 def use_static_catalog():
-    return bool_setting("use_static_catalog", False)
+    return bool_setting("use_static_catalog", True)
+
+
+def catalog_mode():
+    """Return the explicit catalog mode with static mode taking precedence."""
+    if use_static_catalog():
+        return "static"
+    if use_catalog_api():
+        return "api"
+    return "legacy"
 
 
 def static_catalog():
@@ -242,9 +223,13 @@ def static_catalog():
 
 
 def catalog_api():
-    if use_static_catalog():
+    mode = catalog_mode()
+    if mode == "static":
         return static_catalog()
-    return CatalogApiClient(setting("catalog_api_url", "http://192.168.2.226/api"))
+    api_url = setting("catalog_api_url", "").strip()
+    if not api_url:
+        raise CatalogApiError("URL katalógového API je dostupná iba v expertnom režime")
+    return CatalogApiClient(api_url)
 
 
 def ensure_index(scope="all"):
@@ -317,7 +302,7 @@ def add_home_context(item, label, query):
 
 
 def root_menu():
-    if use_catalog_api() or use_static_catalog():
+    if catalog_mode() != "legacy":
         api_root_menu()
         return
     hidden = store().hidden_home_keys()
@@ -355,7 +340,7 @@ def api_root_menu():
     add_directory("Filmy", "api_movies")
     add_directory("Seriály", "api_series")
     static_counts = None
-    if use_static_catalog():
+    if catalog_mode() == "static":
         try:
             static_counts = {row.get("id"): int(row.get("count") or 0) for row in static_catalog().categories() if isinstance(row, dict)}
         except CatalogApiError:
@@ -706,7 +691,7 @@ def catalog_menu():
     episodes = state.get("episode_count") or 0
     unknown = state.get("unknown_count") or 0
     updated = state.get("indexed_at") or "neznáme"
-    source = state.get("source_url") or setting("catalog_url")
+    source = state.get("source_url") or "interný legacy katalóg"
 
     add_command("Aktívny katalóg: {}".format(scope_label), "catalog_status")
     add_command("Stav: {} položiek".format(total), "catalog_status")
@@ -1051,7 +1036,7 @@ def hydrate_api_listing_metadata(items):
 def add_api_media(media):
     title = media.get("display_title") or media.get("title") or "Bez názvu"
     year = media.get("year")
-    versions = int(media.get("versions") or 0)
+    versions = int(media.get("available_files_count") or media.get("variant_count") or media.get("versions") or 0)
     label_parts = [str(year)] if year else []
     if media.get("media_type") == "episode":
         label_parts.append(

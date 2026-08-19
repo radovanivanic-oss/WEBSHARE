@@ -57,6 +57,28 @@ class PublicCatalogTests(unittest.TestCase):
         self.assertEqual(client.seasons(1000727)["data"], [{"season_number": 1, "episode_count": 1}])
         self.assertEqual(client.episodes(1000727)["data"][0]["id"], 2)
 
+    def test_variant_lookup_handles_adjacent_id_ranges(self):
+        client = self.client()
+        client._manifest["files"]["shards"] = [{"sha256": "f0", "range": 0}, {"sha256": "f1", "range": 1}]
+        client._objects["f0"] = [{"id": 24999, "files": [{"id": 9, "ident": "before-boundary"}]}]
+        client._objects["f1"] = [{"id": 25000, "files": [{"id": 10, "ident": "after-boundary"}]}]
+        self.assertEqual(client.files(24999)["data"][0]["ident"], "before-boundary")
+        self.assertEqual(client.files(25000)["data"][0]["ident"], "after-boundary")
+
+    def test_static_pagination_is_complete_and_non_overlapping(self):
+        client = self.client()
+        rows = [{"id": i, "category": "movies", "title": "Title {:02d}".format(i), "display_title": "Title {:02d}".format(i), "year": 2020, "available_files_count": 1} for i in range(1, 8)]
+        client._objects["m"] = rows
+        client._manifest["categories"][0]["record_count"] = len(rows)
+        pages = []
+        for page in range(1, 4):
+            response = client.media(category="movies", page=page, limit=3, sort="title", order="asc")
+            pages.append([row["id"] for row in response["data"]])
+        flattened = [item for page in pages for item in page]
+        self.assertEqual(flattened, list(range(1, 8)))
+        self.assertEqual(len(flattened), len(set(flattened)))
+        self.assertEqual(client.media(category="movies", page=3, limit=3, sort="title", order="asc")["pagination"]["has_more"], False)
+
     def test_corrupt_cached_object_fails_closed(self):
         client = self.client()
         client._objects = {}

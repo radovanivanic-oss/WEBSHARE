@@ -405,9 +405,32 @@ class KodiSearchTests(unittest.TestCase):
         self.assertEqual(captured[0].info[1]["title"], "Marriage's Completion")
         self.assertEqual(captured[0].info[1]["originaltitle"], "결혼의 완성")
 
-    def test_catalog_api_is_the_default_movie_catalog_path(self):
+    def test_static_catalog_is_the_default_catalog_path(self):
         with mock.patch.object(addon.ADDON, "getSetting", return_value=""):
-            self.assertTrue(addon.use_catalog_api())
+            self.assertTrue(addon.use_static_catalog())
+            self.assertEqual(addon.catalog_mode(), "static")
+
+    def test_catalog_mode_precedence_is_explicit(self):
+        def settings(key):
+            return {"use_static_catalog": "true", "use_catalog_api": "true"}.get(key, "")
+        with mock.patch.object(addon.ADDON, "getSetting", side_effect=settings):
+            self.assertEqual(addon.catalog_mode(), "static")
+        def api_settings(key):
+            return {"use_static_catalog": "false", "use_catalog_api": "true", "catalog_api_url": "https://catalog.example/api"}.get(key, "")
+        with mock.patch.object(addon.ADDON, "getSetting", side_effect=api_settings):
+            self.assertEqual(addon.catalog_mode(), "api")
+
+    def test_static_media_uses_exported_variant_count(self):
+        captured = []
+        with mock.patch.object(addon.xbmcplugin, "addDirectoryItem", side_effect=lambda *args, **kwargs: captured.append(args[2])):
+            addon.add_api_media({"id": 1, "title": "Movie", "media_type": "movie", "year": 2026, "available_files_count": 7})
+        self.assertIn("7 verzií", captured[0].label)
+
+    def test_normal_settings_do_not_expose_private_or_legacy_catalog_urls(self):
+        settings_xml = (ADDON_ROOT / "resources" / "settings.xml").read_text(encoding="utf-8")
+        self.assertNotIn("192.168.2.226", settings_xml)
+        for legacy_id in ("catalog_url", "fallback_catalog_url", "movie_catalog_url", "series_catalog_url", "documentary_catalog_url", "sport_catalog_url", "anime_catalog_url", "music_catalog_url", "other_catalog_url"):
+            self.assertNotIn('id="{}"'.format(legacy_id), settings_xml)
 
     def test_real_router_keyboard_api_rendering_and_detail_route(self):
         client = mock.Mock()
