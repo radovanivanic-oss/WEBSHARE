@@ -62,6 +62,7 @@ test("builds and validates a deterministic public media/series/files read model"
   assert.equal(validation.episodes, 1);
   assert.equal(result.manifest.unclassified_exported, 0);
   const manifest = JSON.parse(fs.readFileSync(path.join(result.root, "generations", "fixture-1", "manifest.json"), "utf8"));
+  assert.equal(manifest.schema_version, 2);
   assert.equal(manifest.source_schema_version, 9);
   assert.equal(manifest.build_source_commit, "fixture-commit");
   assert.ok(manifest.categories.find(x => x.category === "series").record_count === 1);
@@ -70,6 +71,10 @@ test("builds and validates a deterministic public media/series/files read model"
   assert.deepEqual(movies.map(row => row.id), [10]);
   assert.equal(movies[0].available_files_count, 1);
   assert.equal(movies[0].variant_count, 1);
+  assert.equal(Object.hasOwn(movies[0], "overview"), false);
+  const detailShard = manifest.details.categories.find(x => x.category === "movies").shards[0].sha256;
+  const details = JSON.parse(require("zlib").gunzipSync(fs.readFileSync(path.join(result.root, "generations", "fixture-1", "objects", detailShard + ".json.gz"))).toString("utf8"));
+  assert.equal(details[0].overview, "plot");
 });
 
 test("fixed-generation manifests and objects are deterministic", t => {

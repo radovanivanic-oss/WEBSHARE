@@ -16,7 +16,7 @@ from resources.lib.catalog_api import CatalogApiError
 from resources.lib.paths import profile_path
 
 
-USER_AGENT = "Webshare Atlas Public Catalog/0.8.20"
+USER_AGENT = "Webshare Atlas Public Catalog/0.8.21"
 ROOT_SCHEMA = "webshare-atlas-public-catalog/v1"
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 
@@ -99,7 +99,7 @@ class PublicCatalogClient(object):
                 pass
 
     def _activate_manifest(self, pointer, manifest, pointer_url, manifest_url, persist_active=False):
-        if manifest.get("schema") != ROOT_SCHEMA or manifest.get("schema_version") != 1 or manifest.get("unclassified_exported") != 0:
+        if manifest.get("schema") != ROOT_SCHEMA or manifest.get("schema_version") not in (1, 2) or manifest.get("unclassified_exported") != 0:
             raise PublicCatalogError("Verejný katalóg má neplatnú schému")
         previous_generation = self._manifest.get("generation_id") if self._manifest else None
         if previous_generation and previous_generation != manifest.get("generation_id"):
@@ -311,6 +311,10 @@ class PublicCatalogClient(object):
 
     def _find_media(self, media_id):
         numeric_id = int(media_id)
+        if self._ensure_manifest().get("schema_version", 1) >= 2:
+            detail = self._range_item("details", numeric_id)
+            if detail:
+                return detail
         shard_range = int(self._ensure_manifest().get("shard_range") or 25000)
         range_number = numeric_id // shard_range
         for category in self._ensure_manifest().get("categories", []):

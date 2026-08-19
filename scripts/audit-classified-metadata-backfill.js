@@ -95,13 +95,15 @@ async function liveSample(records, options, outputDir) {
   const checkpointPath = path.join(outputDir, "live-sample-checkpoint.json");
   const partialPath = path.join(outputDir, "live-sample-results.partial.json");
   let results = [];
+  let values = [];
   let nextIndex = 0;
   if (options.resume && fs.existsSync(checkpointPath)) {
     const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, "utf8"));
     if (JSON.stringify(checkpoint.configuration) !== JSON.stringify(configuration)) throw new Error("live sample checkpoint configuration mismatch");
     const partial = JSON.parse(fs.readFileSync(partialPath, "utf8"));
-    if (!Array.isArray(partial.results) || partial.results.length !== checkpoint.next_index) throw new Error("live sample checkpoint result mismatch");
+    if (!Array.isArray(partial.results) || !Array.isArray(partial.values) || partial.results.length !== checkpoint.next_index || partial.values.length !== checkpoint.next_index) throw new Error("live sample checkpoint result mismatch");
     results = partial.results;
+    values = partial.values;
     nextIndex = checkpoint.next_index;
   }
   for (let index = nextIndex; index < selected.length; index += 1) {
@@ -111,10 +113,12 @@ async function liveSample(records, options, outputDir) {
       const exact = await provider.client.detailsExact(record.media_type, record.provider_id);
       const evaluation = evaluateProviderMetadata(record, exact.details, exact.selectedLanguage);
       results.push({ ...record, state: evaluation.state, fields_to_fill: evaluation.fields_to_fill, selected_language: evaluation.selected_language, overview_digest: evaluation.overview_digest, overview_length: evaluation.overview ? evaluation.overview.length : 0, provider_year: evaluation.provider_year, issues: evaluation.issues, languages_tried: exact.languagesTried, provider_id_verified: String(exact.details?.id || "") === record.provider_id });
+      values.push({ media_id: record.media_id, fields_to_fill: evaluation.fields_to_fill, overview: evaluation.overview, poster_url: evaluation.poster_url, backdrop_url: evaluation.backdrop_url, genres: evaluation.genres, release_date: evaluation.release_date, original_title: evaluation.original_title, selected_overview_language: evaluation.selected_language });
     } catch (error) {
       results.push({ ...record, state: "RETRY_LATER", fields_to_fill: [], selected_language: null, overview_digest: null, overview_length: 0, provider_year: null, issues: [error.code || error.message], languages_tried: [], provider_id_verified: false });
+      values.push({ media_id: record.media_id, fields_to_fill: [], overview: null, poster_url: null, backdrop_url: null, genres: [], release_date: null, original_title: null, selected_overview_language: null });
     }
-    writeJson(partialPath, { schema_version: 1, policy_version: POLICY_VERSION, configuration, results });
+    writeJson(partialPath, { schema_version: 1, policy_version: POLICY_VERSION, configuration, results, values });
     writeJson(checkpointPath, { schema_version: 1, policy_version: POLICY_VERSION, configuration, next_index: index + 1, provider_requests: provider.counters.provider_requests, cache_hits: provider.counters.cache_hits });
   }
     const migrationPlan = results.filter((item) => item.state === "READY" && item.fields_to_fill.length > 0).map((item) => ({
@@ -131,6 +135,8 @@ async function liveSample(records, options, outputDir) {
       policy_version: POLICY_VERSION,
     })).sort((a, b) => a.media_id - b.media_id);
   writeJson(path.join(outputDir, "metadata-migration-plan.json"), { schema_version: 1, policy_version: POLICY_VERSION, provider: options.provider, source: "bounded-live-sample", candidate_count: migrationPlan.length, records: migrationPlan, deterministic_sha256: digest(migrationPlan) });
+  const selectedValues = values.filter((value) => value.fields_to_fill.length > 0).sort((a, b) => a.media_id - b.media_id);
+  writeJson(path.join(outputDir, "metadata-values.json"), { schema_version: 1, policy_version: POLICY_VERSION, provider: options.provider, records: selectedValues, deterministic_sha256: digest(selectedValues) });
   const summary = {
     sample_size: selected.length,
     processed: results.length,
@@ -144,6 +150,8 @@ async function liveSample(records, options, outputDir) {
     sample_digest: digest(results.map((item) => ({ media_id: item.media_id, state: item.state, fields_to_fill: item.fields_to_fill, selected_language: item.selected_language, overview_digest: item.overview_digest, issues: item.issues })).sort((a, b) => a.media_id - b.media_id)),
     migration_plan_count: migrationPlan.length,
     migration_plan_sha256: digest(migrationPlan),
+    metadata_values_count: selectedValues.length,
+    metadata_values_sha256: digest(selectedValues),
   };
   writeJson(path.join(outputDir, "live-sample-results.json"), results);
   writeJson(path.join(outputDir, "live-sample-summary.json"), summary);

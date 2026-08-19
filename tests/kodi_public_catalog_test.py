@@ -27,17 +27,19 @@ class PublicCatalogTests(unittest.TestCase):
         client = PublicCatalogClient("https://catalog.example/current.json", cache_root=tempfile.mkdtemp(prefix="atlas-public-"))
         client._manifest = {
             "schema": "webshare-atlas-public-catalog/v1",
-            "schema_version": 1,
+            "schema_version": 2,
             "generation_id": "fixture",
             "shard_range": 25000,
             "categories": [{"category": "movies", "record_count": 1, "shards": [{"sha256": "m", "range": 10}]}, {"category": "series", "record_count": 1, "shards": [{"sha256": "s", "range": 40}]}],
             "files": {"shards": [{"sha256": "f", "range": 10}]},
             "episodes": {"shards": [{"sha256": "e", "range": 40}]},
+            "details": {"shards": [{"sha256": "d", "range": 10}]},
         }
         client._manifest_url = "https://catalog.example/generations/fixture/manifest.json"
         client._objects = {
-            "m": [{"id": 272158, "category": "movies", "title": "Počiatok", "display_title": "Počiatok", "original_title": "Inception", "year": 2010, "release_date": "2010-07-15", "aliases": ["Inception"]}],
+            "m": [{"id": 272158, "category": "movies", "title": "Počiatok", "display_title": "Počiatok", "original_title": "Inception", "year": 2010, "release_date": "2010-07-15", "aliases": ["Inception"], "variant_count": 1}],
             "s": [{"id": 1000727, "category": "series", "title": "결혼의 완성", "display_title": "The Completion of Marriage", "original_title": "결혼의 완성", "year": 2026, "release_date": "2026-07-04", "aliases": ["The Completion of Marriage"]}],
+            "d": [{"id": 272158, "category": "movies", "title": "Počiatok", "display_title": "Počiatok", "original_title": "Inception", "year": 2010, "release_date": "2010-07-15", "overview": "A detail overview", "genres": [{"name": "Science Fiction"}], "variant_count": 1}],
             "f": [{"id": 272158, "files": [{"id": 1, "ident": "fixture-ident", "name": "Inception.mkv", "needs_file_link": True}]}],
             "e": [{"id": 1000727, "episodes": [{"id": 2, "title": "S01E01", "season_number": 1, "episode_number": 1, "tvshow_id": 1000727}]}],
         }
@@ -49,6 +51,13 @@ class PublicCatalogTests(unittest.TestCase):
         english = client.search("The Completion of Marriage", category="series")
         self.assertEqual([row["id"] for row in native["data"]], [1000727])
         self.assertEqual([row["id"] for row in english["data"]], [1000727])
+
+    def test_v2_listing_is_lean_and_detail_loads_rich_metadata_on_demand(self):
+        client = self.client()
+        self.assertNotIn("overview", client._objects["m"][0])
+        detail = client.detail(272158)
+        self.assertEqual(detail["overview"], "A detail overview")
+        self.assertEqual(detail["genres"][0]["name"], "Science Fiction")
 
     def test_detail_hierarchy_and_variant_ident_are_static(self):
         client = self.client()
