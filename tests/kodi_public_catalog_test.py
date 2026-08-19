@@ -77,7 +77,8 @@ class PublicCatalogTests(unittest.TestCase):
         client.refresh()
         with self.assertRaises(PublicCatalogError):
             client._object({"sha256": hashlib.sha256(b"expected").hexdigest()})
-        active = json.loads(open(os.path.join(client.cache_root, "active.json"), "r", encoding="utf-8").read())
+        with open(os.path.join(client.cache_root, "active.json"), "r", encoding="utf-8") as handle:
+            active = json.loads(handle.read())
         self.assertEqual(active["pointer"]["generation_id"], "old")
 
 
