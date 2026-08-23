@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Webshare Atlas daily read-only discovery observation
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 Europe/Bratislava
+Persistent=true
+Unit=webshare-daily-observation.service
+
+[Install]
+WantedBy=timers.target

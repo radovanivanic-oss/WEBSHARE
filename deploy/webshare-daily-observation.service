@@ -1,0 +1,27 @@
+[Unit]
+Description=Webshare Atlas daily read-only discovery observation
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/home/radeco/webshare-crawler
+
+[Service]
+Type=oneshot
+User=radeco
+Group=radeco
+WorkingDirectory=/home/radeco/webshare-crawler
+EnvironmentFile=/home/radeco/webshare-crawler/.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node scripts/run-daily-discovery-observation.js --series-root runtime/daily-observation --series-id b46.7-7day-observation
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/home/radeco/webshare-crawler/runtime/daily-observation
+

@@ -33,6 +33,8 @@
     "metadata:enrich": "node scripts/enrich-metadata.js",
     "maintenance:daily": "node scripts/run-daily-maintenance.js --mode daily-best-effort",
     "maintenance:weekly": "node scripts/run-daily-maintenance.js --mode weekly-stale",
+    "observation:daily": "node scripts/run-daily-discovery-observation.js",
+    "observation:analyze": "node scripts/analyze-daily-observation-series.js",
     "enumeration:compare": "node scripts/compare-enumeration-snapshot.js",
     "enumeration:benchmark": "node scripts/benchmark-enumeration-only.js",
     "provenance:daily-candidates:audit": "node scripts/audit-daily-candidate-provenance.js",
