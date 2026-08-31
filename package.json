@@ -40,7 +40,9 @@
     "provenance:daily-candidates:audit": "node scripts/audit-daily-candidate-provenance.js",
     "api:start": "node server/catalog-api.js",
     "publish:github": "node publish-exports.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "persistence:report": "node scripts/report-persistence-eligibility.js",
+    "persistence:apply": "node scripts/apply-persistence-plan.js"
   },
   "dependencies": {
     "axios": "^1.12.2",
