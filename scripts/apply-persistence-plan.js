@@ -12,10 +12,10 @@ function argument(argv, name, fallback = null) {
 }
 
 function parseArguments(argv) {
-  const allowed = new Set(["--plan", "--database", "--purged-ident-sidecar", "--series-root", "--series-id", "--backup-path", "--output-dir", "--apply", "--confirm-production-apply"]);
+  const allowed = new Set(["--plan", "--database", "--purged-ident-sidecar", "--series-root", "--series-id", "--backup-path", "--output-dir", "--prevalidated-backup", "--apply", "--confirm-production-apply"]);
   for (let i = 0; i < argv.length; i += 1) {
     if (!allowed.has(argv[i])) throw new Error("B47_OPTION_NOT_ALLOWED");
-    if (!["--apply", "--confirm-production-apply"].includes(argv[i])) i += 1;
+    if (!["--apply", "--confirm-production-apply", "--prevalidated-backup"].includes(argv[i])) i += 1;
   }
   const planPath = argument(argv, "--plan");
   if (!planPath) throw new Error("B47_PLAN_REQUIRED");
@@ -27,6 +27,7 @@ function parseArguments(argv) {
     seriesId: argument(argv, "--series-id", "b46.7-7day-observation"),
     backupPath: argument(argv, "--backup-path"),
     outputDir: argument(argv, "--output-dir"),
+    prevalidatedBackup: argv.includes("--prevalidated-backup"),
     apply: argv.includes("--apply"),
     confirm: argv.includes("--confirm-production-apply"),
   };
