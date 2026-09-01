@@ -164,3 +164,26 @@ test("B54 no-eligible lifecycle is an explicit safe terminal outcome", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("B55 publication authorization retry preserves failure and binds a fresh artifact", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "b55-pub-retry-"));
+  try {
+    const cycleId = "publication-retry-fixture";
+    write(path.join(root, "cycle.json"), { cycle_id: cycleId, public_baseline: { pointer_sha256: "b".repeat(64) } });
+    write(path.join(root, "state.json"), { cycle_id: cycleId, state: m.STATES.PUBLICATION_FAILED, failure: { stage: "publication", code: "RELEASE_VIEW_FAILED", rollback: null }, next_action: "rollback-publication" });
+    fs.writeFileSync(path.join(root, "state-history.jsonl"), "");
+    write(path.join(root, "publication-plan.json"), { source_database_digest: "c".repeat(64), generation_id: "fixture-generation", manifest_sha256: "d".repeat(64) });
+    fs.writeFileSync(path.join(root, "publication-authorization.json"), JSON.stringify({ stale: true }) + "\n");
+    const plan = JSON.parse(fs.readFileSync(path.join(root, "publication-plan.json")));
+    const planSha = m.digest(plan);
+    const phrase = "AUTHORIZE PUBLICATION " + cycleId + " " + planSha;
+    const authorized = m.authorizePublication({ cycleId, cycleRoot: root, planSha, confirmation: phrase, identity: "test-retry", authorizedAt: "2026-09-01T00:00:00.000Z" });
+    assert.equal(authorized.state.state, m.STATES.PUBLICATION_AUTHORIZED);
+    assert.equal(authorized.state.publication_authorization_artifact, "publication-authorization-2.json");
+    assert.equal(fs.existsSync(path.join(root, "publication-authorization-2.json")), true);
+    const history = fs.readFileSync(path.join(root, "state-history.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    assert.deepEqual(history.map((x) => x.state), [m.STATES.PUBLICATION_AUTHORIZATION_REQUIRED, m.STATES.PUBLICATION_AUTHORIZED]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
