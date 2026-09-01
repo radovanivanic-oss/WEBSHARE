@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node main.js",
-    "check": "node --check main.js",
+    "check": "node --check main.js && node --check lib/maintenance-cycle.js && node --check scripts/maintenance-cycle.js",
     "check:publish": "node --check publish-exports.js",
     "catalog:export": "node main.js --classify-only",
     "catalog:import": "node scripts/import-catalog-jsonl.js",
@@ -43,7 +43,16 @@
     "publish:github": "node publish-exports.js",
     "test": "node --test tests/*.test.js",
     "persistence:report": "node scripts/report-persistence-eligibility.js",
-    "persistence:apply": "node scripts/apply-persistence-plan.js"
+    "persistence:apply": "node scripts/apply-persistence-plan.js",
+    "maintenance:cycle": "node scripts/maintenance-cycle.js",
+    "maintenance:prepare": "node scripts/maintenance-cycle.js prepare",
+    "maintenance:status": "node scripts/maintenance-cycle.js status",
+    "maintenance:authorize-apply": "node scripts/maintenance-cycle.js authorize-apply",
+    "maintenance:apply": "node scripts/maintenance-cycle.js apply",
+    "maintenance:prepare-publication": "node scripts/maintenance-cycle.js prepare-publication",
+    "maintenance:authorize-publication": "node scripts/maintenance-cycle.js authorize-publication",
+    "maintenance:publish": "node scripts/maintenance-cycle.js publish",
+    "maintenance:demo": "node scripts/maintenance-cycle.js demo"
   },
   "dependencies": {
     "axios": "^1.12.2",
