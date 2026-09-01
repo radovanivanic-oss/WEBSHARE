@@ -87,6 +87,12 @@ class PublicCatalogTests(unittest.TestCase):
         with self.assertRaises(PublicCatalogError):
             client._object_url("e" * 64)
 
+    def test_mutable_latest_object_base_is_rejected(self):
+        client = self.client()
+        client._manifest["object_base_url"] = "https://github.com/radovanivanic-oss/AG_repo/releases/download/latest"
+        with self.assertRaises(PublicCatalogError):
+            client._object_url("e" * 64)
+
     def test_missing_generation_identity_fails_closed(self):
         client = self.client()
         del client._manifest["generation_id"]

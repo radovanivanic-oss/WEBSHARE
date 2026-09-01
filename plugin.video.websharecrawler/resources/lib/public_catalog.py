@@ -74,6 +74,7 @@ def _release_object_base_url(manifest, repository=PUBLIC_CATALOG_RELEASE_REPOSIT
             or parsed.fragment
             or parsed.params
             or (parsed.hostname or "").lower() == "raw.githubusercontent.com"
+            or any(part.casefold() == "latest" for part in parsed.path.split("/"))
         ):
             raise PublicCatalogError("Manifest obsahuje neplatný object_base_url")
         return base.rstrip("/") + "/"
@@ -85,7 +86,11 @@ def _release_object_base_url(manifest, repository=PUBLIC_CATALOG_RELEASE_REPOSIT
     release_tag = manifest.get("release_tag")
     if release_tag is None:
         release_tag = PUBLIC_CATALOG_RELEASE_PREFIX + generation
-    if not isinstance(release_tag, str) or not RELEASE_TAG_RE.fullmatch(release_tag):
+    if (
+        not isinstance(release_tag, str)
+        or not RELEASE_TAG_RE.fullmatch(release_tag)
+        or release_tag.casefold() == "latest"
+    ):
         raise PublicCatalogError("Manifest nemá bezpečnú identitu Release")
 
     if not isinstance(repository, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
