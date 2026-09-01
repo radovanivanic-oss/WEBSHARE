@@ -1291,6 +1291,47 @@ async function fetchSearchPage(
   }, { signal });
 }
 
+async function fetchAnonymousSearchPage(
+  client,
+  {
+    prefix,
+    offset,
+    limit,
+    wildcardSuffix = "",
+    sort = "recent",
+    category = "video",
+    signal = undefined,
+    requestMeter = null,
+  },
+  stats
+) {
+  const params = new URLSearchParams({
+    what: `${prefix}${wildcardSuffix}`,
+    limit: String(limit),
+    offset: String(offset),
+    sort,
+    category,
+  });
+
+  const response = await postXml(
+    client,
+    SEARCH_URL,
+    params,
+    "search",
+    stats,
+    {
+      signal,
+      requestMeter,
+      requestOperationKey: `anonymous-search:${prefix}:${offset}:${limit}`,
+    }
+  );
+
+  return {
+    total: response.total?.[0] ?? null,
+    files: Array.isArray(response.file) ? response.file : [],
+  };
+}
+
 async function resolveFileLink(client, ident, wst, logger, stats) {
   return retry(
     async () => {
@@ -2449,6 +2490,7 @@ module.exports = {
   createApiClient,
   createWebshareResolver,
   fetchSearchPage,
+  fetchAnonymousSearchPage,
   getConfig,
   mainUsage,
   normalizeFile,

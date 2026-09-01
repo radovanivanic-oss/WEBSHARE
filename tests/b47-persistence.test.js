@@ -198,7 +198,7 @@ test("provider errors are classified conservatively and metadata is secret-free"
   assert.equal(message.includes("secret-password"), false);
   assert.equal(message.includes("abc-secret"), false);
   const metadata = safeProviderRequestMetadata({ query: "a", page_index: 2, offset: 200, limit: 100, request_ordinal: 4, attempt: 1, authentication_succeeded: true, elapsed_request_ms: 12 }, { code: "ERR_BAD_REQUEST", message: "wst=secret-token", response: { status: 400 } });
-  assert.deepEqual(Object.keys(metadata).sort(), ["attempt", "auth_refreshable", "authentication_succeeded", "axios_code", "category", "elapsed_request_ms", "endpoint_name", "error_class", "http_method", "http_status", "limit", "offset", "page_index", "phase", "provider_safe_error_code", "retry_decision", "retryable", "safe_query_literal", "sanitized_provider_message", "sort", "request_ordinal"].sort());
+  assert.deepEqual(Object.keys(metadata).sort(), ["attempt", "auth_refreshable", "authentication_attempted", "authentication_succeeded", "axios_code", "category", "elapsed_request_ms", "endpoint_name", "error_class", "http_method", "http_status", "limit", "offset", "page_index", "phase", "provider_safe_error_code", "retry_decision", "retryable", "safe_query_literal", "sanitized_provider_message", "sort", "request_ordinal"].sort());
   assert.equal(JSON.stringify(metadata).includes("secret-token"), false);
 });
 
