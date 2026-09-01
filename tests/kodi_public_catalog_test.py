@@ -45,6 +45,69 @@ class PublicCatalogTests(unittest.TestCase):
         }
         return client
 
+    def test_missing_object_base_uses_generation_bound_release(self):
+        client = self.client()
+        sha = "a" * 64
+        self.assertEqual(
+            client._object_url(sha),
+            "https://github.com/radovanivanic-oss/AG_repo/releases/download/atlas-catalog-fixture/{}.json.gz".format(sha),
+        )
+        self.assertNotIn("raw.githubusercontent.com", client._object_url(sha))
+
+    def test_explicit_object_base_has_precedence(self):
+        client = self.client()
+        client._manifest["object_base_url"] = "https://objects.example/catalog/b54"
+        sha = "b" * 64
+        self.assertEqual(client._object_url(sha), "https://objects.example/catalog/b54/{}.json.gz".format(sha))
+
+    def test_b49_explicit_release_base_remains_compatible(self):
+        client = self.client()
+        client._manifest.update({
+            "generation_id": "b49-20260901T072316Z",
+            "object_base_url": "https://github.com/radovanivanic-oss/AG_repo/releases/download/atlas-catalog-b49-20260901T072316Z",
+        })
+        sha = "c" * 64
+        self.assertEqual(
+            client._object_url(sha),
+            "https://github.com/radovanivanic-oss/AG_repo/releases/download/atlas-catalog-b49-20260901T072316Z/{}.json.gz".format(sha),
+        )
+
+    def test_b53_generation_derives_its_own_release_identity(self):
+        client = self.client()
+        client._manifest["generation_id"] = "b53-20260901T130321Z"
+        sha = "d" * 64
+        self.assertIn(
+            "/atlas-catalog-b53-20260901T130321Z/{}.json.gz".format(sha),
+            client._object_url(sha),
+        )
+
+    def test_known_ag_raw_object_base_is_rejected(self):
+        client = self.client()
+        client._manifest["object_base_url"] = "https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/v1/generations/fixture/objects"
+        with self.assertRaises(PublicCatalogError):
+            client._object_url("e" * 64)
+
+    def test_missing_generation_identity_fails_closed(self):
+        client = self.client()
+        del client._manifest["generation_id"]
+        with self.assertRaises(PublicCatalogError):
+            client._object_url("f" * 64)
+
+    def test_release_tag_is_escaped_without_latest_dependency(self):
+        client = self.client()
+        client._manifest["release_tag"] = "atlas catalog+v1"
+        sha = "1" * 64
+        self.assertEqual(
+            client._object_url(sha),
+            "https://github.com/radovanivanic-oss/AG_repo/releases/download/atlas%20catalog%2Bv1/{}.json.gz".format(sha),
+        )
+        self.assertNotIn("latest", client._object_url(sha).lower())
+
+    def test_invalid_object_digest_fails_closed(self):
+        client = self.client()
+        with self.assertRaises(PublicCatalogError):
+            client._object_url("../objects/escape")
+
     def test_native_and_english_search_share_canonical_entity(self):
         client = self.client()
         native = client.search("결혼의 완성", category="series")

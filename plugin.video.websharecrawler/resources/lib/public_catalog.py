@@ -9,16 +9,21 @@ import json
 import os
 import re
 from datetime import date
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from resources.lib.catalog_api import CatalogApiError
 from resources.lib.paths import profile_path
 
 
-USER_AGENT = "Webshare Atlas Public Catalog/0.8.24"
+USER_AGENT = "Webshare Atlas Public Catalog/0.8.25"
 ROOT_SCHEMA = "webshare-atlas-public-catalog/v1"
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
+PUBLIC_CATALOG_RELEASE_REPOSITORY = "radovanivanic-oss/AG_repo"
+PUBLIC_CATALOG_RELEASE_PREFIX = "atlas-catalog-"
+GENERATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+RELEASE_TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~ +@=%-]{0,127}$")
+OBJECT_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _tokens(value):
@@ -39,6 +44,56 @@ def _sha256(data):
 
 class PublicCatalogError(CatalogApiError):
     pass
+
+
+def _release_object_base_url(manifest, repository=PUBLIC_CATALOG_RELEASE_REPOSITORY):
+    """Return the immutable object base for one selected catalog generation.
+
+    The pointer and manifest live in AG_repo, while the content-addressed
+    objects live in the matching immutable GitHub Release.  Older manifests
+    may provide an explicit base; newer manifests can omit it because the
+    established release tag is deterministically derived from generation_id.
+    """
+    if not isinstance(manifest, dict):
+        raise PublicCatalogError("Verejný manifest nemá platný formát")
+
+    if "object_base_url" in manifest:
+        base = manifest.get("object_base_url")
+        try:
+            parsed = urlparse(base) if isinstance(base, str) else None
+        except (TypeError, ValueError):
+            parsed = None
+        if (
+            not base
+            or parsed is None
+            or parsed.scheme.lower() != "https"
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.params
+            or (parsed.hostname or "").lower() == "raw.githubusercontent.com"
+        ):
+            raise PublicCatalogError("Manifest obsahuje neplatný object_base_url")
+        return base.rstrip("/") + "/"
+
+    generation = manifest.get("generation_id")
+    if not isinstance(generation, str) or not GENERATION_ID_RE.fullmatch(generation):
+        raise PublicCatalogError("Manifest nemá bezpečnú identitu generácie")
+
+    release_tag = manifest.get("release_tag")
+    if release_tag is None:
+        release_tag = PUBLIC_CATALOG_RELEASE_PREFIX + generation
+    if not isinstance(release_tag, str) or not RELEASE_TAG_RE.fullmatch(release_tag):
+        raise PublicCatalogError("Manifest nemá bezpečnú identitu Release")
+
+    if not isinstance(repository, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise PublicCatalogError("Chýba bezpečná identita verejného Release repozitára")
+    return "https://github.com/{}/releases/download/{}/".format(
+        repository,
+        quote(release_tag, safe="-._~"),
+    )
 
 
 class PublicCatalogClient(object):
@@ -163,10 +218,10 @@ class PublicCatalogClient(object):
 
     def _object_url(self, sha):
         manifest = self._ensure_manifest()
-        base = manifest.get("object_base_url")
-        if base:
-            return base.rstrip("/") + "/" + sha + ".json.gz"
-        return urljoin(self._manifest_url, "objects/" + sha + ".json.gz")
+        if not isinstance(sha, str) or not OBJECT_SHA_RE.fullmatch(sha):
+            raise PublicCatalogError("Verejný katalóg obsahuje neplatný objektový digest")
+        base = _release_object_base_url(manifest)
+        return base + sha + ".json.gz"
 
     def _object(self, item):
         sha = item["sha256"]
