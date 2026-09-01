@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node main.js",
-    "check": "node --check main.js && node --check lib/maintenance-cycle.js && node --check scripts/maintenance-cycle.js",
+    "check": "node --check main.js && node --check lib/maintenance-cycle.js && node --check scripts/maintenance-cycle.js && node --check lib/stale-verification.js && node --check scripts/stale-verification.js",
     "check:publish": "node --check publish-exports.js",
     "catalog:export": "node main.js --classify-only",
     "catalog:import": "node scripts/import-catalog-jsonl.js",
@@ -52,7 +52,10 @@
     "maintenance:prepare-publication": "node scripts/maintenance-cycle.js prepare-publication",
     "maintenance:authorize-publication": "node scripts/maintenance-cycle.js authorize-publication",
     "maintenance:publish": "node scripts/maintenance-cycle.js publish",
-    "maintenance:demo": "node scripts/maintenance-cycle.js demo"
+    "maintenance:demo": "node scripts/maintenance-cycle.js demo",
+    "stale:run": "node scripts/stale-verification.js run",
+    "stale:status": "node scripts/stale-verification.js status",
+    "stale:demo": "node scripts/stale-verification.js demo"
   },
   "dependencies": {
     "axios": "^1.12.2",
