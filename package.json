@@ -55,7 +55,9 @@
     "maintenance:demo": "node scripts/maintenance-cycle.js demo",
     "stale:run": "node scripts/stale-verification.js run",
     "stale:status": "node scripts/stale-verification.js status",
-    "stale:demo": "node scripts/stale-verification.js demo"
+    "stale:demo": "node scripts/stale-verification.js demo",
+    "kodi:build": "node scripts/publish-kodi-repository.js build",
+    "kodi:publish": "node scripts/publish-kodi-repository.js publish"
   },
   "dependencies": {
     "axios": "^1.12.2",
