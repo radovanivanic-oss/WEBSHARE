@@ -33,6 +33,7 @@ function logger(file) {
 
 async function main() {
   loadDotEnv();
+  if (!process.env.MAINTENANCE_PUBLICATION_ADAPTER) process.env.MAINTENANCE_PUBLICATION_ADAPTER = path.join(process.cwd(), "lib/maintenance-publication-adapter.js");
   const logFile = path.resolve(process.env.STALE_WEEKLY_LOG || "runtime/stale-weekly/weekly.log");
   rotateLog(logFile);
   const result = await weekly.runWeeklyStaleMaintenance({ stateRoot: process.env.STALE_WEEKLY_STATE_ROOT, runsRoot: process.env.STALE_WEEKLY_RUNS_ROOT, databasePath: process.env.PRODUCTION_DATABASE_PATH, sidecarPath: process.env.B39_SIDECAR_PATH, observationRoot: process.env.DAILY_OBSERVATION_ROOT, publicRepository: process.env.PUBLIC_KODI_REPOSITORY, generationId: process.env.STALE_GENERATION_ID }, { logger: logger(logFile) });
