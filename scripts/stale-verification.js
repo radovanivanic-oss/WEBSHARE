@@ -3,11 +3,12 @@
 
 const path = require("node:path");
 const stale = require("../lib/stale-verification");
+const weekly = require("../lib/weekly-stale-maintenance");
 
 function parse(argv) {
   const command = ["run", "status", "demo"].includes(argv[0]) ? argv[0] : "run";
   const start = command === argv[0] ? 1 : 0;
-  const allowed = new Set(["--database", "--sidecar", "--output-root", "--run-id", "--at", "--bucket", "--batch-size", "--max-retries"]);
+  const allowed = new Set(["--database", "--sidecar", "--output-root", "--weekly-state-root", "--run-id", "--at", "--bucket", "--batch-size", "--max-retries"]);
   const options = { command };
   for (let index = start; index < argv.length; index += 1) {
     const name = argv[index];
@@ -18,6 +19,7 @@ function parse(argv) {
   if (options.database) options.databasePath = path.resolve(options.database);
   if (options.sidecar) options.sidecarPath = path.resolve(options.sidecar);
   if (options.outputRoot) options.outputRoot = path.resolve(options.outputRoot);
+  if (options.weeklyStateRoot) options.weeklyStateRoot = path.resolve(options.weeklyStateRoot);
   if (options.bucket !== undefined) options.bucket = Number(options.bucket);
   if (options.batchSize !== undefined) options.batchSize = Number(options.batchSize);
   if (options.maxRetries !== undefined) options.maxRetries = Number(options.maxRetries);
@@ -27,7 +29,7 @@ function parse(argv) {
 function usage() {
   return [
     "stale-verification run [--database FILE] [--sidecar FILE] [--output-root DIR] [--run-id ID] [--at ISO] [--bucket 0..51] [--batch-size 1..50] [--max-retries 1..2]",
-    "stale-verification status [--output-root DIR]",
+    "stale-verification status [--output-root DIR] [--weekly-state-root DIR]",
     "stale-verification demo",
   ].join("\n");
 }
@@ -45,8 +47,12 @@ async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help")) { console.log(usage()); return; }
   const options = parse(argv);
   let result;
-  if (options.command === "status") result = stale.statusReport(options.outputRoot);
-  else if (options.command === "demo") result = demo();
+  if (options.command === "status") {
+    const historical = stale.statusReport(options.outputRoot);
+    let scheduler = { scheduler_enabled: false, cadence: "Sunday 05:00", time_zone: "Europe/Bratislava", error: "scheduler status unavailable" };
+    try { scheduler = require("./stale-schedule").status(); } catch (error) { scheduler.error = error.code || error.message || "scheduler status unavailable"; }
+    result = { ...historical, scheduler_state: scheduler.scheduler_enabled ? "enabled" : "disabled/not installed", scheduler, weekly: weekly.statusReport(options.weeklyStateRoot) };
+  } else if (options.command === "demo") result = demo();
   else result = await stale.runStaleVerification(options);
   console.log(JSON.stringify(result, null, 2));
   return result;

@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node main.js",
-    "check": "node --check main.js && node --check lib/maintenance-cycle.js && node --check lib/production-maintenance.js && node --check scripts/maintenance-cycle.js && node --check scripts/run-production-maintenance.js && node --check lib/stale-verification.js && node --check scripts/stale-verification.js && node --check lib/stale-cleanup.js && node --check scripts/stale-cleanup.js",
+    "check": "node --check main.js && node --check lib/maintenance-cycle.js && node --check lib/production-maintenance.js && node --check scripts/maintenance-cycle.js && node --check scripts/run-production-maintenance.js && node --check lib/stale-verification.js && node --check scripts/stale-verification.js && node --check lib/stale-cleanup.js && node --check scripts/stale-cleanup.js && node --check lib/weekly-stale-maintenance.js && node --check scripts/run-weekly-stale-maintenance.js && node --check scripts/stale-schedule.js",
     "check:publish": "node --check publish-exports.js",
     "catalog:export": "node main.js --classify-only",
     "catalog:import": "node scripts/import-catalog-jsonl.js",
@@ -57,6 +57,10 @@
     "stale:run": "node scripts/stale-verification.js run",
     "stale:status": "node scripts/stale-verification.js status",
     "stale:cleanup": "node scripts/stale-cleanup.js",
+    "stale:weekly": "node scripts/run-weekly-stale-maintenance.js",
+    "stale:schedule:install": "node scripts/stale-schedule.js install",
+    "stale:schedule:status": "node scripts/stale-schedule.js status",
+    "stale:schedule:remove": "node scripts/stale-schedule.js remove",
     "stale:demo": "node scripts/stale-verification.js demo",
     "kodi:build": "node scripts/publish-kodi-repository.js build",
     "kodi:publish": "node scripts/publish-kodi-repository.js publish"
