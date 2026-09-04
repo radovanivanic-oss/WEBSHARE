@@ -1,0 +1,5 @@
+# Webshare Atlas daily production maintenance. Discovery runs at 03:17 via
+# webshare-daily-observation.timer; this runs the safe additive apply/publish
+# stage shortly afterward in Europe/Bratislava.
+CRON_TZ=Europe/Bratislava
+47 3 * * * cd /home/radeco/webshare-crawler && env MAINTENANCE_PUBLICATION_ADAPTER=/home/radeco/webshare-crawler/lib/maintenance-publication-adapter.js PRODUCTION_MAINTENANCE_LOG=/home/radeco/webshare-crawler/runtime/production-maintenance/production-cron.log /usr/bin/node scripts/run-production-maintenance.js >> /home/radeco/webshare-crawler/runtime/production-maintenance/production-cron.log 2>&1

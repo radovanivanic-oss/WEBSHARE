@@ -1,5 +1,5 @@
 [Unit]
-Description=Webshare Atlas daily read-only discovery observation
+Description=Webshare Atlas daily discovery, additive maintenance, and publication
 After=network-online.target
 Wants=network-online.target
 ConditionPathIsDirectory=/home/radeco/webshare-crawler
@@ -11,7 +11,9 @@ Group=radeco
 WorkingDirectory=/home/radeco/webshare-crawler
 EnvironmentFile=/home/radeco/webshare-crawler/.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/env node scripts/run-daily-discovery-observation.js --series-root runtime/daily-observation --series-id b46.7-7day-observation
+Environment=MAINTENANCE_PUBLICATION_ADAPTER=/home/radeco/webshare-crawler/lib/maintenance-publication-adapter.js
+ExecStart=/usr/bin/env node scripts/run-production-maintenance.js
+TimeoutStartSec=2h
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -23,5 +25,6 @@ ProtectControlGroups=true
 LockPersonality=true
 RestrictRealtime=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-ReadWritePaths=/home/radeco/webshare-crawler/runtime/daily-observation
-
+ReadWritePaths=/home/radeco/webshare-crawler/runtime
+ReadWritePaths=/home/radeco/webshare-crawler/data
+ReadWritePaths=/home/radeco/ag
