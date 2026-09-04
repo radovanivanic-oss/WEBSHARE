@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node main.js",
-    "check": "node --check main.js && node --check lib/maintenance-cycle.js && node --check lib/production-maintenance.js && node --check scripts/maintenance-cycle.js && node --check scripts/run-production-maintenance.js && node --check lib/stale-verification.js && node --check scripts/stale-verification.js",
+    "check": "node --check main.js && node --check lib/maintenance-cycle.js && node --check lib/production-maintenance.js && node --check scripts/maintenance-cycle.js && node --check scripts/run-production-maintenance.js && node --check lib/stale-verification.js && node --check scripts/stale-verification.js && node --check lib/stale-cleanup.js && node --check scripts/stale-cleanup.js",
     "check:publish": "node --check publish-exports.js",
     "catalog:export": "node main.js --classify-only",
     "catalog:import": "node scripts/import-catalog-jsonl.js",
@@ -56,6 +56,7 @@
     "maintenance:demo": "node scripts/maintenance-cycle.js demo",
     "stale:run": "node scripts/stale-verification.js run",
     "stale:status": "node scripts/stale-verification.js status",
+    "stale:cleanup": "node scripts/stale-cleanup.js",
     "stale:demo": "node scripts/stale-verification.js demo",
     "kodi:build": "node scripts/publish-kodi-repository.js build",
     "kodi:publish": "node scripts/publish-kodi-repository.js publish"
