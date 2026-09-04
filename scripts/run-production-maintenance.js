@@ -37,6 +37,7 @@ function rotateBoundedLog(filePath) {
 async function main() {
   loadEnvFile(path.join(process.cwd(), ".env"));
   rotateBoundedLog(process.env.PRODUCTION_MAINTENANCE_LOG);
+  rotateBoundedLog(process.env.PRODUCTION_LEGACY_LOG || path.join(process.cwd(), "runtime/webshare-crawler.log"));
   const result = await runAutomaticProductionMaintenance();
   console.log(JSON.stringify(result, null, 2));
   if (result.status === "DISCOVERY_FAILED") process.exitCode = 1;
