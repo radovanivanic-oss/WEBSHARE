@@ -36,6 +36,7 @@ function rotateBoundedLog(filePath) {
 
 async function main() {
   loadEnvFile(path.join(process.cwd(), ".env"));
+  if (!process.env.MAINTENANCE_PUBLICATION_ADAPTER) process.env.MAINTENANCE_PUBLICATION_ADAPTER = path.join(process.cwd(), "lib/maintenance-publication-adapter.js");
   rotateBoundedLog(process.env.PRODUCTION_MAINTENANCE_LOG);
   rotateBoundedLog(process.env.PRODUCTION_LEGACY_LOG || path.join(process.cwd(), "runtime/webshare-crawler.log"));
   const result = await runAutomaticProductionMaintenance();
