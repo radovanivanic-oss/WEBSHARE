@@ -32,7 +32,10 @@ function repositoryCommit() {
 }
 
 async function main(options = parseArguments(process.argv.slice(2))) {
-  const result = await runObservation({ ...options, repositoryCommit: repositoryCommit() });
+  // This is a recurring service, not a one-shot finite observation series.
+  // Keep completed historical evidence immutable while allowing the next
+  // calendar day to append a new observation to the long-lived series.
+  const result = await runObservation({ ...options, targetValidObservations: 36500, continuous: true, allowCompletedSeries: true, repositoryCommit: repositoryCommit() });
   console.log(JSON.stringify({ status: result.manifest.status, observation: result.manifest.observation_finished_at, artifact_dir: result.manifest.series_id ? path.relative(process.cwd(), result.runDir) : null, summary: result.summary }, null, 2));
   return result;
 }

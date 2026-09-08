@@ -24,6 +24,8 @@ function baseDependencies(f, events) {
     apply: async () => { throw new Error("apply should not run"); },
     authorizePublication: async () => { throw new Error("publication should not be authorized"); },
     publish: async () => { throw new Error("publication should not run"); },
+    supersedeFailedPublication: async () => { throw new Error("publication recovery should not run"); },
+    prepareCurrentPublication: async () => { throw new Error("publication recovery should not run"); },
   };
 }
 
@@ -31,7 +33,7 @@ test("daily no-change run skips apply and publication", async () => {
   const f = fixture();
   try {
     const events = [];
-    const result = await runAutomaticProductionMaintenance({ now: "2026-09-04T01:20:00.000Z", statusRoot: f.root, dependencies: baseDependencies(f, events) });
+    const result = await runAutomaticProductionMaintenance({ now: "2026-09-04T01:20:00.000Z", statusRoot: f.root, maintenanceRoot: path.join(f.root, "maintenance"), dependencies: baseDependencies(f, events) });
     assert.equal(result.status, "NO_CHANGES");
     assert.deepEqual(events, ["observe", "prepare"]);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, "latest.json"))).last_error, null);
@@ -55,11 +57,11 @@ test("daily additions drain batches and rerun idempotently", async () => {
     deps.apply = async () => { events.push("apply"); f.health = { snapshot: { files: 102, media: 52 }, production_baseline_sha256: "after" }; return { result: { inserted_files: 2, preflight: { snapshot: { media: 50 } }, postflight: f.health }, publication_plan: { generation_id: "generation-2" } }; };
     deps.authorizePublication = async () => { events.push("authorize-publication"); return { authorization: { automatic: true } }; };
     deps.publish = async () => { events.push("publish"); f.pointer = { ...f.pointer, generation_id: "generation-2" }; return { publicationResult: { result: { generation_id: "generation-2", release_id: "release-2" } } }; };
-    const first = await runAutomaticProductionMaintenance({ now: "2026-09-04T01:21:00.000Z", statusRoot: f.root, dependencies: deps });
+    const first = await runAutomaticProductionMaintenance({ now: "2026-09-04T01:21:00.000Z", statusRoot: f.root, maintenanceRoot: path.join(f.root, "maintenance"), dependencies: deps });
     assert.equal(first.files_added, 2);
     assert.equal(first.media_added, 2);
     assert.equal(first.current_public.generation_id, "generation-2");
-    const second = await runAutomaticProductionMaintenance({ now: "2026-09-05T01:21:00.000Z", statusRoot: f.root, dependencies: { ...baseDependencies(f, events), prepare: async () => ({ state: { state: "NO_ELIGIBLE_ITEMS" }, plan: { discovery_delta: [], counters: { planned: 0 } } }) } });
+    const second = await runAutomaticProductionMaintenance({ now: "2026-09-05T01:21:00.000Z", statusRoot: f.root, maintenanceRoot: path.join(f.root, "maintenance"), dependencies: { ...baseDependencies(f, events), prepare: async () => ({ state: { state: "NO_ELIGIBLE_ITEMS" }, plan: { discovery_delta: [], counters: { planned: 0 } } }) } });
     assert.equal(second.status, "NO_CHANGES");
     assert.equal(events.filter((event) => event === "publish").length, 1);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
@@ -71,7 +73,7 @@ test("classification rejection can leave an empty safe plan", async () => {
     const events = [];
     const deps = baseDependencies(f, events);
     deps.observe = async () => ({ manifest: { observation_finished_at: "2026-09-04T01:18:00.000Z", local_calendar_date: "2026-09-04", discovery: { unique_idents: 4 }, plan: { counters: { accepted: 0 } }, deep_audit: { rejected: 4 } } });
-    const result = await runAutomaticProductionMaintenance({ now: "2026-09-04T01:22:00.000Z", statusRoot: f.root, dependencies: deps });
+    const result = await runAutomaticProductionMaintenance({ now: "2026-09-04T01:22:00.000Z", statusRoot: f.root, maintenanceRoot: path.join(f.root, "maintenance"), dependencies: deps });
     assert.equal(result.status, "NO_CHANGES");
     assert.equal(result.files_added, 0);
     assert.deepEqual(events, ["prepare"]);
@@ -88,11 +90,33 @@ test("publication failure records an error without changing the previous pointer
     deps.apply = async () => ({ result: { inserted_files: 1, preflight: { snapshot: { media: 50 } }, postflight: { snapshot: { files: 101, media: 51 }, production_baseline_sha256: "after" } }, publication_plan: { generation_id: "generation-failed" } });
     deps.authorizePublication = async () => ({ authorization: { automatic: true } });
     deps.publish = async () => { throw Object.assign(new Error("REMOTE_POINTER_SWITCH_FAILED"), { code: "REMOTE_POINTER_SWITCH_FAILED" }); };
-    await assert.rejects(() => runAutomaticProductionMaintenance({ now: "2026-09-04T01:23:00.000Z", statusRoot: f.root, dependencies: deps }), /REMOTE_POINTER_SWITCH_FAILED/);
+    await assert.rejects(() => runAutomaticProductionMaintenance({ now: "2026-09-04T01:23:00.000Z", statusRoot: f.root, maintenanceRoot: path.join(f.root, "maintenance"), dependencies: deps }), /REMOTE_POINTER_SWITCH_FAILED/);
     assert.equal(f.pointer.generation_id, "old-generation");
     const status = JSON.parse(fs.readFileSync(path.join(f.root, "latest.json")));
     assert.equal(status.state, "FAILED");
     assert.equal(status.last_error.stage, "publication");
     assert.equal(status.last_successful_apply.files_added, 1);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("publication recovery snapshots the current database after source drift", async () => {
+  const f = fixture();
+  try {
+    const events = [];
+    const maintenanceRoot = path.join(f.root, "maintenance");
+    const pendingRoot = path.join(maintenanceRoot, "old-cycle");
+    fs.mkdirSync(pendingRoot, { recursive: true });
+    fs.writeFileSync(path.join(pendingRoot, "state.json"), JSON.stringify({ state: "PUBLICATION_FAILED", failure: { rollback: null } }));
+    fs.writeFileSync(path.join(pendingRoot, "publication-plan.json"), JSON.stringify({ generation_id: "old-generation" }));
+    fs.writeFileSync(path.join(pendingRoot, "apply-result.json"), JSON.stringify({ inserted_files: 2, postflight: { production_baseline_sha256: "before" } }));
+    const deps = baseDependencies(f, events);
+    deps.supersedeFailedPublication = async () => { events.push("supersede"); };
+    deps.prepareCurrentPublication = async () => { events.push("prepare-current"); return { root: path.join(maintenanceRoot, "recovery"), publicationPlan: { generation_id: "fresh-generation" } }; };
+    deps.authorizePublication = async () => { events.push("authorize-publication"); };
+    deps.publish = async () => { events.push("publish"); return { publicationResult: { result: { generation_id: "fresh-generation" } } }; };
+    f.health = { snapshot: { files: 101, media: 51 }, production_baseline_sha256: "after" };
+    const result = await runAutomaticProductionMaintenance({ now: "2026-09-08T01:24:00.000Z", statusRoot: f.root, maintenanceRoot, dependencies: { ...deps, prepare: async () => ({ state: { state: "NO_ELIGIBLE_ITEMS" }, plan: { discovery_delta: [], counters: { planned: 0 } } }) } });
+    assert.equal(result.last_publication.generation_id, "fresh-generation");
+    assert.deepEqual(events, ["supersede", "prepare-current", "authorize-publication", "publish", "prepare"]);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
