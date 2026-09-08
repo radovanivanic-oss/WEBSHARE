@@ -117,6 +117,6 @@ test("publication recovery snapshots the current database after source drift", a
     f.health = { snapshot: { files: 101, media: 51 }, production_baseline_sha256: "after" };
     const result = await runAutomaticProductionMaintenance({ now: "2026-09-08T01:24:00.000Z", statusRoot: f.root, maintenanceRoot, dependencies: { ...deps, prepare: async () => ({ state: { state: "NO_ELIGIBLE_ITEMS" }, plan: { discovery_delta: [], counters: { planned: 0 } } }) } });
     assert.equal(result.last_publication.generation_id, "fresh-generation");
-    assert.deepEqual(events, ["supersede", "prepare-current", "authorize-publication", "publish", "prepare"]);
+    assert.deepEqual(events, ["observe", "supersede", "prepare-current", "authorize-publication", "publish"]);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
