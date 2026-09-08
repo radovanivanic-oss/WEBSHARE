@@ -139,7 +139,7 @@ test("anonymous transport changes implementation identity but preserves B47 sema
   const contract = buildObservationContract({ repositoryCommit: "b50-test-commit" });
   assert.equal(contract.discovery_authentication_mode, "anonymous");
   assert.equal(contract.semantic_contract_id, "d8069a78dd25ebb424610e2db6db85e7661731050952df85fe1d21846952f70f");
-  assert.match(contract.implementation_build_id, /^b50-anonymous-discovery-v1@/u);
+  assert.match(contract.implementation_build_id, /^b57-adaptive-frontier-v1@/u);
   const old = { ...contract, discovery_authentication_mode: "authenticated", implementation_build_id: "b46.7-daily-observation-v1@old", fingerprint: "old" };
   assert.equal(compatibleObservationContracts(contract, old).compatible, true);
   const dependencies = await createLiveObservationDependencies();
