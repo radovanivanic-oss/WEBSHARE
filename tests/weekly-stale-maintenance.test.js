@@ -104,8 +104,9 @@ test("scheduler install is idempotent, removable, and does not contain daily com
   const daily = "CRON_TZ=Europe/Bratislava\n47 3 * * * cd /home/radeco/webshare-crawler && /usr/bin/node scripts/run-production-maintenance.js\n";
   const once = schedule.installText(daily), twice = schedule.installText(once);
   assert.equal(twice, once);
-  assert.match(once, /0 5 \* \* 0/u);
-  assert.match(once, /47 3 \* \* \*/u);
+  assert.match(once, /0 3 \* 3-10 \*/u);
+  assert.match(once, /0 4 \* 11-12,1-2 \*/u);
+  assert.doesNotMatch(once, /47 3 \* \* \* cd \/home\/radeco\/webshare-crawler/u);
   assert.equal(schedule.removeBlock(once).text, daily);
   assert.equal(schedule.statusFromText(once).scheduler_enabled, true);
 });
