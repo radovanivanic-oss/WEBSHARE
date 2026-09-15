@@ -10,6 +10,7 @@ const {
 } = require("../lib/catalog-safety");
 const { classifyMedia } = require("../lib/media-classifier");
 const { parseMediaName } = require("../lib/media-name-parser");
+const { resolveCanonicalSeriesRoot } = require("../lib/series-identity");
 const { getCatalogConfig } = require("../src/config/catalog-config");
 const { nowIso, openCatalogDatabase } = require("../src/db/catalog-db");
 const { migrateDatabase } = require("../src/db/migrate");
@@ -219,6 +220,7 @@ function createImportBatch(database, statements, context) {
 function applyImportEntries(database, statements, entries, context) {
     let inserted = 0;
     let updated = 0;
+    const seriesIdentityCache = context.seriesIdentityCache || new Map();
     for (const entry of entries) {
       const { item, rawJson } = entry;
       const ident = String(item.ident || item.id || "").trim();
@@ -235,20 +237,25 @@ function applyImportEntries(database, statements, entries, context) {
         const classification = classifyMedia({ candidate: { ...candidate, title: parsed.title }, sampleName: originalName });
         let tvshowId = null;
         if (candidate.candidateType === "episode" && candidate.seriesKey) {
-          const showMediaKey = `local:${candidate.seriesKey}`;
-          tvshowId = statements.insertMedia.get({
-            mediaKey: showMediaKey,
-            mediaType: "tv",
-            category: "series",
-            title: parsed.title || originalName,
-            year: parsed.year,
-            seasonNumber: null,
-            episodeNumber: null,
-            tvshowId: null,
-            confidence: parsed.confidence,
-            classifierVersion: classification.classifierVersion,
-            now,
-          }).id;
+          const resolution = resolveCanonicalSeriesRoot(database, parsed, { cache: seriesIdentityCache });
+          if (resolution.status === "MATCHED") {
+            tvshowId = resolution.root_id;
+          } else {
+            const showMediaKey = `local:${candidate.seriesKey}`;
+            tvshowId = statements.insertMedia.get({
+              mediaKey: showMediaKey,
+              mediaType: "tv",
+              category: "series",
+              title: parsed.title || originalName,
+              year: parsed.year,
+              seasonNumber: null,
+              episodeNumber: null,
+              tvshowId: null,
+              confidence: parsed.confidence,
+              classifierVersion: classification.classifierVersion,
+              now,
+            }).id;
+          }
         }
         mediaId = statements.insertMedia.get({
           mediaKey: `local:${candidate.candidateKey}`,

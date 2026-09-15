@@ -4,6 +4,7 @@ const { selectBestMatch } = require("../lib/match-scorer");
 const { TmdbClient, isTemporaryError } = require("../providers/tmdb-client");
 const { getCatalogConfig } = require("../src/config/catalog-config");
 const { nowIso, openCatalogDatabase } = require("../src/db/catalog-db");
+const { reconcileCanonicalSeriesInPlace } = require("../lib/series-identity");
 const { migrateDatabase } = require("../src/db/migrate");
 const { rebuildMediaFts, setAppState } = require("../src/repositories/media-repository");
 
@@ -189,6 +190,7 @@ function applyTvMatch(database, job, metadata, confidence, config) {
     mediaIds.push(targetEpisodeMediaId);
   }
   database.prepare("UPDATE media SET is_active = 1 WHERE id = ?").run(showId);
+  reconcileCanonicalSeriesInPlace(database, showId, { title: metadata.title, year: metadata.year });
   for (const previousShowId of previousShowIds) {
     if (previousShowId === showId) continue;
     database.prepare(`

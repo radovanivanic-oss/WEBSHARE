@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node main.js",
-    "check": "node --check main.js && node --check lib/maintenance-cycle.js && node --check lib/production-maintenance.js && node --check scripts/maintenance-cycle.js && node --check scripts/run-production-maintenance.js && node --check lib/stale-verification.js && node --check scripts/stale-verification.js && node --check lib/stale-cleanup.js && node --check scripts/stale-cleanup.js && node --check lib/weekly-stale-maintenance.js && node --check scripts/run-weekly-stale-maintenance.js && node --check scripts/stale-schedule.js",
+    "check": "node --check main.js && node --check lib/maintenance-cycle.js && node --check lib/production-maintenance.js && node --check lib/series-identity.js && node --check scripts/maintenance-cycle.js && node --check scripts/run-production-maintenance.js && node --check scripts/reconcile-series-identities.js && node --check lib/stale-verification.js && node --check scripts/stale-verification.js && node --check lib/stale-cleanup.js && node --check scripts/stale-cleanup.js && node --check lib/weekly-stale-maintenance.js && node --check scripts/run-weekly-stale-maintenance.js && node --check scripts/stale-schedule.js",
     "check:publish": "node --check publish-exports.js",
     "catalog:export": "node main.js --classify-only",
     "catalog:import": "node scripts/import-catalog-jsonl.js",
