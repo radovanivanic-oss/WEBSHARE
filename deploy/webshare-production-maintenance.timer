@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Webshare Atlas daily production maintenance
+
+[Timer]
+OnCalendar=*-*-* 03:47:00 Europe/Bratislava
+Persistent=true
+Unit=webshare-production-maintenance.service
+
+[Install]
+WantedBy=timers.target
+

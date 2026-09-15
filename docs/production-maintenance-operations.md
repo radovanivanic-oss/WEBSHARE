@@ -2,10 +2,9 @@
 
 The production workflow runs once per day in `Europe/Bratislava`. Discovery
 starts at 03:17 and the additive maintenance stage starts at 03:47, after the
-observation is available. The checked-in systemd unit can run the combined
-workflow at 03:17 when installed by a privileged deploy; `tb` currently uses
-the existing system discovery timer plus the installed user cron stage because
-the account has no noninteractive root deployment grant:
+observation is available. The discovery and additive stages use separate
+systemd timers so the Europe/Bratislava wall-clock schedule remains correct
+even though `tb` runs its host clock in UTC:
 
 1. continue the anonymous discovery series and reuse the same-day observation when a run is restarted;
 2. refresh persistence and eligibility using the established B39/B47 safety gates;
@@ -13,7 +12,7 @@ the account has no noninteractive root deployment grant:
 4. publish only when SQLite changed, using the existing immutable Release publication and pointer-last switch.
 
 The discovery timer is `webshare-daily-observation.timer`; the additive stage
-is `webshare-production-maintenance.cron`. Additive authorization is generated
+is `webshare-production-maintenance.timer`. Additive authorization is generated
 by the service with a fixed machine identity; duplicate, tombstone,
 classification, ownership, and integrity checks remain mandatory.
 

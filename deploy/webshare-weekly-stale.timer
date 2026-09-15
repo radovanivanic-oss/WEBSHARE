@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Webshare Atlas weekly stale maintenance
+
+[Timer]
+OnCalendar=Sun *-*-* 05:00:00 Europe/Bratislava
+Persistent=true
+Unit=webshare-weekly-stale.service
+
+[Install]
+WantedBy=timers.target
+

@@ -1,0 +1,27 @@
+[Unit]
+Description=Webshare Atlas weekly stale maintenance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=radeco
+Group=radeco
+WorkingDirectory=/home/radeco/webshare-crawler
+EnvironmentFile=-/home/radeco/webshare-crawler/.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=MAINTENANCE_PUBLICATION_ADAPTER=/home/radeco/webshare-crawler/lib/maintenance-publication-adapter.js
+Environment=STALE_WEEKLY_LOG=/home/radeco/webshare-crawler/runtime/stale-weekly/weekly-cron.log
+ExecStart=/usr/bin/env node scripts/run-weekly-stale-maintenance.js
+StandardOutput=append:/home/radeco/webshare-crawler/runtime/stale-weekly/weekly-cron.log
+StandardError=append:/home/radeco/webshare-crawler/runtime/stale-weekly/weekly-cron.log
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
