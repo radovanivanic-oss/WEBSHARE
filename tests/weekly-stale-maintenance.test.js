@@ -106,7 +106,8 @@ test("scheduler install is idempotent, removable, and does not contain daily com
   assert.equal(twice, once);
   assert.match(once, /0 3 \* 3-10 \*/u);
   assert.match(once, /0 4 \* 11-12,1-2 \*/u);
-  assert.doesNotMatch(once, /47 3 \* \* \* cd \/home\/radeco\/webshare-crawler/u);
+  const managed = once.slice(once.indexOf(schedule.BEGIN));
+  assert.doesNotMatch(managed, /run-production-maintenance\.js/u);
   assert.equal(schedule.removeBlock(once).text, daily);
   assert.equal(schedule.statusFromText(once).scheduler_enabled, true);
 });
