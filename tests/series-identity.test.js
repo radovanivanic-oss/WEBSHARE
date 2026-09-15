@@ -102,7 +102,7 @@ test("local root later receiving authoritative TMDb identity reconciles its owne
   const tmdbRoot = addTmdbSeries(database, { id: 9002, episodes: ["1:1"] });
   const result = require("../lib/series-identity").reconcileCanonicalSeriesInPlace(database, tmdbRoot, { title: "Atlas Show", year: 2024 });
   assert.equal(result.status, "RECONCILED");
-  assert.equal(database.prepare("SELECT tvshow_id FROM media WHERE id=?").get(localRoot.id).tvshow_id, tmdbRoot);
+  assert.equal(database.prepare("SELECT tvshow_id FROM media WHERE tvshow_id=? AND season_number=2 AND episode_number=1").get(tmdbRoot).tvshow_id, tmdbRoot);
   assert.equal(database.prepare("SELECT is_active FROM media WHERE id=?").get(localRoot.id).is_active, 0);
   database.close();
 });
