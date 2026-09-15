@@ -63,6 +63,11 @@ function insertPlayableFile(database, mediaId, ident) {
 
 function addTmdbSeries(database, { id, title = "Atlas Show", year = 2024, episodes = ["1:1"], files = true }) {
   const rootId = insertRoot(database, { mediaKey: `tmdb:tv:${id}`, title, year, externalId: String(id) });
+  const job = database.prepare("SELECT id FROM metadata_jobs WHERE candidate_key = ?").get(`tv|${normalizeSeriesTitle(title)}`);
+  if (job) {
+    database.prepare("UPDATE metadata_jobs SET status = 'matched', selected_external_id = ?, updated_at = ? WHERE id = ?")
+      .run(String(id), new Date().toISOString(), job.id);
+  }
   for (const value of episodes) {
     const [season, episode] = value.split(":").map(Number);
     const episodeId = insertEpisode(database, rootId, { externalId: `${id}:s${season}:e${episode}`, season, episode, title });
