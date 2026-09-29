@@ -11,8 +11,8 @@ test("metadata enrichment can prioritize recent movie candidates", () => {
       retryFailed: false,
       onlyPending: true,
       recentFirst: true,
-    provider: "tmdb",
-    maxAttempts: 3,
+      provider: "tmdb",
+      maxAttempts: 3,
     }
   );
 });
