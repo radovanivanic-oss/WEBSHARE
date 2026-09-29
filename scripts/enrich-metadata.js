@@ -308,12 +308,21 @@ async function runWorker(options) {
   const orderBy = options.recentFirst
     ? "attempts, CASE WHEN candidate_type = 'movie' THEN 0 ELSE 1 END, parsed_year DESC, id"
     : "attempts, id";
+  // Keep the bounded worker fair across the two provider-backed candidate
+  // types. A large movie backlog must not consume every batch and leave
+  // pending/local TV roots waiting forever for enrichment.
+  const perTypeLimit = Math.max(1, Math.ceil(options.limit / 2));
   const jobs = database.prepare(`
-    SELECT * FROM metadata_jobs
-    WHERE status IN (${placeholders}) AND (status NOT IN ('not_found', 'ambiguous') OR attempts < ?)
-      AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+    SELECT * FROM (
+      SELECT metadata_jobs.*,
+        ROW_NUMBER() OVER (PARTITION BY candidate_type ORDER BY ${orderBy}) AS type_rank
+      FROM metadata_jobs
+      WHERE status IN (${placeholders}) AND (status NOT IN ('not_found', 'ambiguous') OR attempts < ?)
+        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+    ) ranked
+    WHERE type_rank <= ?
     ORDER BY ${orderBy} LIMIT ?
-  `).all(...statuses, options.maxAttempts, nowIso(), options.limit);
+  `).all(...statuses, options.maxAttempts, nowIso(), perTypeLimit, options.limit);
   let cursor = 0;
   const counts = {};
   let stopping = false;
