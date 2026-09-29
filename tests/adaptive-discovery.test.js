@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const fs = require("node:fs");
 const path = require("node:path");
-const { discoverAdaptiveFrontier } = require("../lib/adaptive-discovery");
+const { discoverAdaptiveFrontier, initialFrontier } = require("../lib/adaptive-discovery");
 
 const filler = (prefix, page, count = 100) => Array.from({ length: count }, (_, i) => ({ ident: `${prefix}-${page}-${i}`, name: `Filler.${prefix}.${page}.${i}.mkv`, size: 1, type: "mkv" }));
 
@@ -50,6 +50,48 @@ test("persisted frontier resumes unfinished child work", async () => {
   const second = await discoverAdaptiveFrontier({ fetchPage: saturatedProvider(true), state: saved, policy: { maxRequests: 600, maxExpandedPrefixes: 300, maxPrefixDepth: 3, maxRuntimeMs: 60000 } });
   assert.ok(second.queries.includes("the*"));
   assert.ok(second.items.some((item) => item.ident === "gentlemen-regression"));
+});
+
+test("productive prefixes receive reserved revisits while new frontier work continues", async () => {
+  const state = initialFrontier();
+  state.run_count = 1;
+  for (const node of Object.values(state.nodes)) {
+    node.checked = true;
+    node.children_generated = true;
+    node.last_checked = "2026-09-19T01:00:00.000Z";
+    node.last_checked_calendar_date = "2026-09-19";
+    node.last_checked_run = 1;
+    node.last_query_count = 0;
+  }
+  state.nodes["the*"] = {
+    prefix: "the*", depth: 3, parent: "th*", checked: true, saturated: false,
+    children_generated: true, recent_yield: 0, last_query_count: 1, last_checked: "2026-09-19T01:00:00.000Z",
+    last_checked_calendar_date: "2026-09-19", last_checked_run: 1, total_yield: 1,
+    branch_score: 1, checks: 1,
+  };
+  for (const prefix of ["newa*", "newb*", "newc*"]) {
+    state.nodes[prefix] = {
+      prefix, depth: 3, parent: "new*", checked: false, saturated: false,
+      children_generated: false, recent_yield: 0, last_query_count: 0,
+      last_checked_calendar_date: null, total_yield: 0, branch_score: 10, checks: 0,
+    };
+  }
+
+  const result = await discoverAdaptiveFrontier({
+    state,
+    now: "2026-09-20T01:00:00.000Z",
+    calendarDate: "2026-09-20",
+    fetchPage: async ({ query }) => ({
+      total: 1,
+      files: [{ ident: `result-${query}`, name: `Result.${query}.S01E01.mkv`, size: 1, type: "mkv" }],
+    }),
+    policy: { maxRequests: 4, maxExpandedPrefixes: 4, maxPrefixDepth: 3, maxRuntimeMs: 60000 },
+  });
+
+  assert.deepEqual(result.queries.slice(0, 3), ["newa*", "newb*", "the*"]);
+  assert.deepEqual(result.revisited_prefixes, ["the*"]);
+  assert.equal(result.revisit_budget, 2);
+  assert.equal(result.revisit_policy.mode, "NORMAL");
 });
 
 test("adaptive discovery has no title-specific Gentlemen branch", () => {

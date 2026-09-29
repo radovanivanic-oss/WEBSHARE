@@ -112,6 +112,21 @@ test("B54 immutable artifact writer refuses overwrite and artifact index records
   }
 });
 
+test("B54 compact immutable ledger output remains valid JSON without pretty-print expansion", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "b54-compact-ledger-"));
+  try {
+    const artifact = path.join(root, "persistence-ledger.json");
+    const value = { kind: "B47_PERSISTENCE_LEDGER", records: Array.from({ length: 300 }, (_, index) => ({ ident: `record-${index}`, payload: "x".repeat(2000) })) };
+    m.writeNew(artifact, value, { compact: true });
+    const text = fs.readFileSync(artifact, "utf8");
+    assert.equal(text.includes("\n"), true);
+    assert.equal(text.trim().includes("\n"), false);
+    assert.deepEqual(JSON.parse(text), value);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 
 test("B54 inventory excludes diagnostic artifacts and preserves one independent date", () => {
   const { buildObservationContract, SET_NAMES, sha256, stableJson } = require("../lib/daily-observation");

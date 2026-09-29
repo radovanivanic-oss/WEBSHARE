@@ -7,12 +7,14 @@ const { nowIso, openCatalogDatabase } = require("../src/db/catalog-db");
 const { reconcileCanonicalSeriesInPlace } = require("../lib/series-identity");
 const { migrateDatabase } = require("../src/db/migrate");
 const { rebuildMediaFts, setAppState } = require("../src/repositories/media-repository");
+const { buildEnrichmentCandidates } = require("../lib/metadata-enrichment");
 
 function parseArguments(argv) {
   const options = {
     limit: 1000,
     dryRun: false,
     retryFailed: false,
+    maxAttempts: 3,
     onlyPending: false,
     recentFirst: false,
     provider: "tmdb",
@@ -21,6 +23,7 @@ function parseArguments(argv) {
     const value = argv[index];
     if (value === "--dry-run") options.dryRun = true;
     else if (value === "--retry-failed") options.retryFailed = true;
+    else if (value === "--max-attempts") options.maxAttempts = Math.max(1, Number.parseInt(argv[++index], 10) || 3);
     else if (value === "--only-pending") options.onlyPending = true;
     else if (value === "--recent-first") options.recentFirst = true;
     else if (value === "--limit") options.limit = Number.parseInt(argv[++index], 10) || 1000;
@@ -31,8 +34,15 @@ function parseArguments(argv) {
 
 function jobStatuses(options) {
   if (options.onlyPending) return ["pending"];
-  if (options.retryFailed) return ["pending", "temporary_error", "not_found"];
+  if (options.retryFailed) return ["pending", "temporary_error", "not_found", "ambiguous"];
   return ["pending", "temporary_error"];
+}
+
+function nextRetryAt(status, attempts, maxAttempts) {
+  if (status === "temporary_error") return new Date(Date.now() + 3600000).toISOString();
+  if (!maxAttempts || attempts >= maxAttempts) return null;
+  const days = status === "ambiguous" ? 7 : Math.min(30, 2 ** Math.max(0, attempts - 1));
+  return new Date(Date.now() + days * 86400000).toISOString();
 }
 
 function mapMetadata(details, type) {
@@ -217,23 +227,44 @@ function addAliases(database, mediaIds, metadata) {
 async function processJob(database, client, job, config, options) {
   const candidate = database.prepare("SELECT * FROM candidates WHERE id = ?").get(job.candidate_id);
   if (!candidate) throw new Error(`Chýba candidate ${job.candidate_id}.`);
-  const candidateForScore = { title: job.parsed_title, parsedYear: job.parsed_year };
-  const results = await client.search(candidateForScore, job.candidate_type);
-  const selection = selectBestMatch(candidateForScore, results, job.candidate_type, {
-    auto: config.metadataAutoMatchThreshold,
-    ambiguous: config.metadataAmbiguousThreshold,
+  const media = candidate.media_id ? database.prepare("SELECT * FROM media WHERE id = ?").get(candidate.media_id) : null;
+  const files = candidate.media_id
+    ? database.prepare("SELECT parsed_title, parsed_year, original_name FROM files WHERE media_id = ? AND is_active = 1 AND is_playable_video = 1 ORDER BY id DESC LIMIT 12").all(candidate.media_id)
+    : [];
+  const aliases = candidate.media_id
+    ? database.prepare("SELECT alias FROM media_aliases WHERE media_id = ? ORDER BY id").all(candidate.media_id)
+    : [];
+  const candidates = buildEnrichmentCandidates({
+    media: media || { title: job.parsed_title, year: job.parsed_year, media_type: job.candidate_type },
+    files: [{ parsed_title: job.parsed_title, parsed_year: job.parsed_year }, ...files],
+    aliases,
+    limit: 5,
   });
+  if (!candidates.length) candidates.push({ title: job.parsed_title, year: job.parsed_year, source: "job" });
+  let selection = { status: "not_found", best: null, scored: [] };
+  for (const enrichmentCandidate of candidates) {
+    const candidateForScore = { title: enrichmentCandidate.title, parsedYear: enrichmentCandidate.year };
+    const results = await client.search(candidateForScore, job.candidate_type);
+    const current = selectBestMatch(candidateForScore, results, job.candidate_type, {
+      auto: config.metadataAutoMatchThreshold,
+      ambiguous: config.metadataAmbiguousThreshold,
+    });
+    if (!selection.best || (current.best && current.best.score > selection.best.score)) selection = current;
+    if (current.status === "matched") break;
+  }
   if (options.dryRun) {
     console.log(JSON.stringify({ job: job.id, key: job.candidate_key, status: selection.status, best: selection.best?.score || null }));
     return selection.status;
   }
   const now = nowIso();
   if (selection.status !== "matched") {
+    const attempts = Number(job.attempts || 0) + 1;
+    const nextAttempt = nextRetryAt(selection.status, attempts, options.maxAttempts);
     database.prepare(`
       UPDATE metadata_jobs SET status = ?, attempts = attempts + 1, confidence = ?,
         selected_source = 'tmdb', selected_external_id = ?, last_error = NULL,
-        locked_at = NULL, updated_at = ? WHERE id = ?
-    `).run(selection.status, selection.best?.score || null, selection.best?.result?.id || null, now, job.id);
+        next_attempt_at = ?, locked_at = NULL, updated_at = ? WHERE id = ?
+    `).run(selection.status, selection.best?.score || null, selection.best?.result?.id || null, nextAttempt, now, job.id);
     return selection.status;
   }
   const details = await client.details(job.candidate_type, selection.best.result.id);
@@ -279,9 +310,10 @@ async function runWorker(options) {
     : "attempts, id";
   const jobs = database.prepare(`
     SELECT * FROM metadata_jobs
-    WHERE status IN (${placeholders}) AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+    WHERE status IN (${placeholders}) AND (status NOT IN ('not_found', 'ambiguous') OR attempts < ?)
+      AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
     ORDER BY ${orderBy} LIMIT ?
-  `).all(...statuses, nowIso(), options.limit);
+  `).all(...statuses, options.maxAttempts, nowIso(), options.limit);
   let cursor = 0;
   const counts = {};
   let stopping = false;

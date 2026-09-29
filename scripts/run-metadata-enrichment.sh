@@ -22,4 +22,7 @@ if [[ -z "${TMDB_API_KEY:-}" ]]; then
 fi
 
 BATCH_SIZE="${METADATA_ENRICH_BATCH_SIZE:-500}"
-npm run metadata:enrich -- --only-pending --recent-first --limit "$BATCH_SIZE"
+MAX_ATTEMPTS="${METADATA_ENRICH_MAX_ATTEMPTS:-3}"
+# Pending work is preferred, but bounded retries are required for roots whose
+# first provider search happened before better parsed/alias evidence existed.
+npm run metadata:enrich -- --retry-failed --max-attempts "$MAX_ATTEMPTS" --recent-first --limit "$BATCH_SIZE"

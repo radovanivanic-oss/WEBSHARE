@@ -12,6 +12,7 @@ EnvironmentFile=-/home/radeco/webshare-crawler/.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=MAINTENANCE_PUBLICATION_ADAPTER=/home/radeco/webshare-crawler/lib/maintenance-publication-adapter.js
 Environment=PRODUCTION_MAINTENANCE_LOG=/home/radeco/webshare-crawler/runtime/production-maintenance/production-cron.log
+Environment=NODE_OPTIONS=--max-old-space-size=8192
 ExecStart=/usr/bin/env node scripts/run-production-maintenance.js
 StandardOutput=append:/home/radeco/webshare-crawler/runtime/production-maintenance/production-cron.log
 StandardError=append:/home/radeco/webshare-crawler/runtime/production-maintenance/production-cron.log
@@ -24,4 +25,3 @@ ProtectControlGroups=true
 LockPersonality=true
 RestrictRealtime=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-
