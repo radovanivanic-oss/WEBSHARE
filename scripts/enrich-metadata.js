@@ -18,6 +18,7 @@ function parseArguments(argv) {
     onlyPending: false,
     recentFirst: false,
     candidateType: null,
+    candidateKey: null,
     provider: "tmdb",
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -28,6 +29,7 @@ function parseArguments(argv) {
     else if (value === "--only-pending") options.onlyPending = true;
     else if (value === "--recent-first") options.recentFirst = true;
     else if (value === "--candidate-type") options.candidateType = argv[++index] || null;
+    else if (value === "--candidate-key") options.candidateKey = argv[++index] || null;
     else if (value === "--limit") options.limit = Number.parseInt(argv[++index], 10) || 1000;
     else if (value === "--provider") options.provider = argv[++index] || "tmdb";
   }
@@ -313,16 +315,21 @@ async function runWorker(options) {
   // Keep the bounded worker fair across the two provider-backed candidate
   // types. A large movie backlog must not consume every batch and leave
   // pending/local TV roots waiting forever for enrichment.
-  const perTypeLimit = options.candidateType ? options.limit : Math.max(1, Math.ceil(options.limit / 2));
-  const candidateFilter = options.candidateType ? " AND candidate_type = ?" : "";
-  const selectionArgs = [...statuses, ...(options.candidateType ? [options.candidateType] : []), options.maxAttempts, nowIso(), perTypeLimit, options.limit];
+  const perTypeLimit = options.candidateType || options.candidateKey ? options.limit : Math.max(1, Math.ceil(options.limit / 2));
+  const candidateFilters = [];
+  const candidateArgs = [];
+  if (options.candidateType) { candidateFilters.push("candidate_type = ?"); candidateArgs.push(options.candidateType); }
+  if (options.candidateKey) { candidateFilters.push("candidate_key = ?"); candidateArgs.push(options.candidateKey); }
+  const candidateFilter = candidateFilters.length ? " AND " + candidateFilters.join(" AND ") : "";
+  const retryAmbiguousNow = options.retryFailed ? " OR status = 'ambiguous'" : "";
+  const selectionArgs = [...statuses, ...candidateArgs, options.maxAttempts, nowIso(), perTypeLimit, options.limit];
   const jobs = database.prepare(`
     SELECT * FROM (
       SELECT metadata_jobs.*,
         ROW_NUMBER() OVER (PARTITION BY candidate_type ORDER BY ${orderBy}) AS type_rank
       FROM metadata_jobs
-      WHERE status IN (${placeholders})${candidateFilter} AND (status NOT IN ('not_found', 'ambiguous') OR attempts < ?)
-        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+      WHERE status IN (${placeholders})${candidateFilter} AND ((status NOT IN ('not_found', 'ambiguous') OR attempts < ?)${retryAmbiguousNow})
+        AND ((next_attempt_at IS NULL OR next_attempt_at <= ?${retryAmbiguousNow}) )
     ) ranked
     WHERE type_rank <= ?
     ORDER BY ${orderBy} LIMIT ?

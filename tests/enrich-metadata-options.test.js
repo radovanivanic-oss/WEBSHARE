@@ -12,6 +12,7 @@ test("metadata enrichment can prioritize recent movie candidates", () => {
       onlyPending: true,
       recentFirst: true,
       candidateType: null,
+      candidateKey: null,
       provider: "tmdb",
       maxAttempts: 3,
     }
