@@ -17,6 +17,7 @@ function parseArguments(argv) {
     maxAttempts: 3,
     onlyPending: false,
     recentFirst: false,
+    candidateType: null,
     provider: "tmdb",
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -26,6 +27,7 @@ function parseArguments(argv) {
     else if (value === "--max-attempts") options.maxAttempts = Math.max(1, Number.parseInt(argv[++index], 10) || 3);
     else if (value === "--only-pending") options.onlyPending = true;
     else if (value === "--recent-first") options.recentFirst = true;
+    else if (value === "--candidate-type") options.candidateType = argv[++index] || null;
     else if (value === "--limit") options.limit = Number.parseInt(argv[++index], 10) || 1000;
     else if (value === "--provider") options.provider = argv[++index] || "tmdb";
   }
@@ -311,18 +313,20 @@ async function runWorker(options) {
   // Keep the bounded worker fair across the two provider-backed candidate
   // types. A large movie backlog must not consume every batch and leave
   // pending/local TV roots waiting forever for enrichment.
-  const perTypeLimit = Math.max(1, Math.ceil(options.limit / 2));
+  const perTypeLimit = options.candidateType ? options.limit : Math.max(1, Math.ceil(options.limit / 2));
+  const candidateFilter = options.candidateType ? " AND candidate_type = ?" : "";
+  const selectionArgs = [...statuses, ...(options.candidateType ? [options.candidateType] : []), options.maxAttempts, nowIso(), perTypeLimit, options.limit];
   const jobs = database.prepare(`
     SELECT * FROM (
       SELECT metadata_jobs.*,
         ROW_NUMBER() OVER (PARTITION BY candidate_type ORDER BY ${orderBy}) AS type_rank
       FROM metadata_jobs
-      WHERE status IN (${placeholders}) AND (status NOT IN ('not_found', 'ambiguous') OR attempts < ?)
+      WHERE status IN (${placeholders})${candidateFilter} AND (status NOT IN ('not_found', 'ambiguous') OR attempts < ?)
         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
     ) ranked
     WHERE type_rank <= ?
     ORDER BY ${orderBy} LIMIT ?
-  `).all(...statuses, options.maxAttempts, nowIso(), perTypeLimit, options.limit);
+  `).all(...selectionArgs);
   let cursor = 0;
   const counts = {};
   let stopping = false;
