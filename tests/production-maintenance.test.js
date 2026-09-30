@@ -80,6 +80,28 @@ test("classification rejection can leave an empty safe plan", async () => {
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test("discovery failure reuses the latest successful observation for downstream work", async () => {
+  const f = fixture();
+  const observationRoot = path.join(f.root, "observations");
+  const artifactDir = "2026-09-03T011800Z";
+  fs.mkdirSync(path.join(observationRoot, artifactDir), { recursive: true });
+  fs.writeFileSync(path.join(observationRoot, "series.json"), JSON.stringify({ observations: [{ observation_finished_at: "2026-09-03T01:19:00.000Z", local_calendar_date: "2026-09-03", artifact_dir: artifactDir }] }));
+  fs.writeFileSync(path.join(observationRoot, artifactDir, "manifest.json"), JSON.stringify({ observation_finished_at: "2026-09-03T01:19:00.000Z", local_calendar_date: "2026-09-03", discovery: { unique_idents: 7 }, plan: { counters: { accepted: 6 } }, deep_audit: { rejected: 1 } }));
+  try {
+    const events = [];
+    const deps = baseDependencies(f, events);
+    deps.observe = async () => { events.push("observe"); throw Object.assign(new Error("provider denied request"), { code: "ERR_BAD_REQUEST" }); };
+    const result = await runAutomaticProductionMaintenance({ now: "2026-09-04T01:20:00.000Z", observationRoot, statusRoot: f.root, maintenanceRoot: path.join(f.root, "maintenance"), dependencies: deps });
+    assert.equal(result.status, "NO_CHANGES");
+    assert.equal(result.discovery_failure.code, "ERR_BAD_REQUEST");
+    assert.deepEqual(events, ["observe", "prepare"]);
+    const status = JSON.parse(fs.readFileSync(path.join(f.root, "latest.json")));
+    assert.equal(status.last_discovery.reused, true);
+    assert.equal(status.last_discovery.local_calendar_date, "2026-09-03");
+    assert.equal(status.last_discovery_failure.code, "ERR_BAD_REQUEST");
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("publication failure records an error without changing the previous pointer", async () => {
   const f = fixture();
   try {
