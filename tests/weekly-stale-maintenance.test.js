@@ -104,8 +104,8 @@ test("scheduler install is idempotent and installs daily stale coverage", () => 
   const daily = "CRON_TZ=Europe/Bratislava\n47 3 * * * cd /home/radeco/webshare-crawler && /usr/bin/node scripts/run-production-maintenance.js\n";
   const once = schedule.installText(daily), twice = schedule.installText(once);
   assert.equal(twice, once);
-  assert.match(once, /0 3 \* \*/u);
-  assert.doesNotMatch(once, /05:00|Sunday/u);
+  assert.match(once, /0 3 \* \* */u);
+  assert.match(once, /0 15 \* \* */u);
   const managed = once.slice(once.indexOf(schedule.BEGIN));
   assert.doesNotMatch(managed, /run-production-maintenance\.js/u);
   assert.equal(schedule.removeBlock(once).text, daily);
