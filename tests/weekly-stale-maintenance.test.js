@@ -8,6 +8,7 @@ const test = require("node:test");
 const weekly = require("../lib/weekly-stale-maintenance");
 const schedule = require("../scripts/stale-schedule");
 const maintenance = require("../lib/maintenance-cycle");
+const staleCleanup = require("../lib/stale-cleanup");
 
 const NOW = new Date("2026-09-04T12:00:00.000Z");
 
@@ -110,6 +111,26 @@ test("scheduler install is idempotent and installs daily stale coverage", () => 
   assert.doesNotMatch(managed, /run-production-maintenance\.js/u);
   assert.equal(schedule.removeBlock(once).text, daily);
   assert.equal(schedule.statusFromText(once).scheduler_enabled, true);
+});
+
+test("nested publication recovery marks every failed ancestor complete", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stale-pending-chain-"));
+  try {
+    const addCycle = (runId, state = maintenance.STATES.PUBLICATION_FAILED) => {
+      const cycleRoot = path.join(root, runId, "publication-cycle");
+      fs.mkdirSync(cycleRoot, { recursive: true });
+      fs.writeFileSync(path.join(cycleRoot, "state.json"), JSON.stringify({ state, cycle_id: `stale-${runId}`, updated_at: "2026-09-01T00:00:00.000Z" }));
+      fs.writeFileSync(path.join(cycleRoot, "publication-plan.json"), "{}\n");
+    };
+    addCycle("run-old");
+    addCycle("run-retry", maintenance.STATES.PUBLICATION_ROLLED_BACK);
+    addCycle("run-retry-current", maintenance.STATES.PUBLICATION_ROLLED_BACK);
+    addCycle("run-unrelated");
+    fs.writeFileSync(path.join(root, "run-retry", "publication-retry.json"), JSON.stringify({ status: "PUBLICATION_RESUMED", source_run_id: "run-old", run_id: "run-retry" }));
+    fs.writeFileSync(path.join(root, "run-retry-current", "publication-retry-123.json"), JSON.stringify({ status: "PUBLICATION_RESUMED", source_run_id: "run-retry", run_id: "run-retry-current" }));
+    const pending = staleCleanup.findPendingPublication(root);
+    assert.equal(pending.run_id, "run-unrelated");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("secrets are absent from safe errors", () => { assert.doesNotMatch(JSON.stringify(weekly.safeError(new Error("wst=secret password=hidden"))), /secret|hidden/u); });
