@@ -9,6 +9,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from urllib.parse import urlencode, urlparse
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from resources.lib.paths import profile_dir
@@ -52,8 +53,19 @@ def _post_xml(url, payload):
     try:
         with urlopen(request, timeout=30) as response:
             raw = response.read()
+    except HTTPError as exc:
+        status = int(getattr(exc, "code", 0) or 0)
+        if status == 401:
+            raise ResolverError("Webshare authentication failed.") from None
+        if status == 403:
+            raise ResolverError("Webshare access was rejected (HTTP 403); file availability was not determined.") from None
+        if status == 429:
+            raise ResolverError("Webshare rate limit reached; file availability was not determined.") from None
+        if status >= 500:
+            raise ResolverError("Webshare provider temporarily unavailable; file availability was not determined.") from None
+        raise ResolverError("Webshare provider request failed (HTTP {}).".format(status)) from None
     except Exception:
-        raise ResolverError("Webshare network request failed.") from None
+        raise ResolverError("Webshare network request failed; file availability was not determined.") from None
 
     try:
         root = ET.fromstring(raw)

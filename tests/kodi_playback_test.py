@@ -220,6 +220,18 @@ class ResolverTests(unittest.TestCase):
         with mock.patch.object(webshare, "urlopen", QueueTransport(response)):
             with self.assertRaisesRegex(webshare.ResolverError, "file unavailable"):
                 self.resolver()._file_link("fixture-ident", "fixture-wst")
+    def test_http_403_does_not_claim_file_is_unavailable(self):
+        response = HTTPError("https://webshare.cz/api/file_link/", 403, "forbidden", {}, None)
+        with mock.patch.object(webshare, "urlopen", QueueTransport(response)):
+            with self.assertRaisesRegex(webshare.ResolverError, "availability was not determined") as raised:
+                self.resolver()._file_link("fixture-ident", "fixture-wst")
+        self.assertNotIn("file unavailable", str(raised.exception).lower())
+
+    def test_http_429_is_classified_as_temporary(self):
+        response = HTTPError("https://webshare.cz/api/file_link/", 429, "rate limited", {}, None)
+        with mock.patch.object(webshare, "urlopen", QueueTransport(response)):
+            with self.assertRaisesRegex(webshare.ResolverError, "rate limit"):
+                self.resolver()._file_link("fixture-ident", "fixture-wst")
 
     def test_https_link_is_accepted(self):
         self.assertEqual(webshare._validate_stream_url("https://media.example.test/path"), "https://media.example.test/path")
