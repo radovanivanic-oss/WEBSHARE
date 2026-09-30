@@ -202,3 +202,23 @@ test("incomplete current-db recovery is retried before a new additive batch", as
     assert.deepEqual(events, ["observe", "prepare-current", "authorize-publication", "publish", "prepare"]);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
+
+test("rolled-back recovery is rebuilt without requiring a second supersede transition", async () => {
+  const f = fixture();
+  try {
+    const events = [];
+    const maintenanceRoot = path.join(f.root, "maintenance");
+    const pendingRoot = path.join(maintenanceRoot, "rolled-back-recovery");
+    fs.mkdirSync(pendingRoot, { recursive: true });
+    fs.writeFileSync(path.join(pendingRoot, "state.json"), JSON.stringify({ state: "PUBLICATION_ROLLED_BACK", failure: { rollback: true }, updated_at: "2026-09-08T01:26:00.000Z" }));
+    fs.writeFileSync(path.join(pendingRoot, "publication-plan.json"), JSON.stringify({ generation_id: "stale-generation" }));
+    fs.writeFileSync(path.join(pendingRoot, "apply-result.json"), JSON.stringify({ inserted_files: 0, postflight: { production_baseline_sha256: "before" } }));
+    const deps = baseDependencies(f, events);
+    deps.prepareCurrentPublication = async () => { events.push("prepare-current"); return { root: path.join(maintenanceRoot, "recovery"), publicationPlan: { generation_id: "fresh-generation" } }; };
+    deps.authorizePublication = async () => { events.push("authorize-publication"); };
+    deps.publish = async () => { events.push("publish"); return { publicationResult: { result: { generation_id: "fresh-generation" } } }; };
+    const result = await runAutomaticProductionMaintenance({ now: "2026-09-08T01:28:00.000Z", statusRoot: f.root, maintenanceRoot, dependencies: deps });
+    assert.equal(result.last_publication.generation_id, "fresh-generation");
+    assert.deepEqual(events, ["observe", "prepare-current", "authorize-publication", "publish", "prepare"]);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
