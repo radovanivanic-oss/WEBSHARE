@@ -38,11 +38,11 @@ test("fileInfo maps every mocked transport and response failure deterministicall
     ["oversized body", fileInfoOk(`<name>${"x".repeat(65537)}</name><available>1</available><removed>0</removed>`), "UNSUPPORTED_RESPONSE", false],
     ["unsupported content type", { status: 200, headers: { "content-type": "text/plain" }, data: "raw-body" }, "UNSUPPORTED_RESPONSE", false],
     ["missing required fields", fileInfoOk("<name>movie.mkv</name>"), "MALFORMED_RESPONSE", false],
-    ["contradictory state", fileInfoOk("<name>movie.mkv</name><available>1</available><removed>1</removed>"), "MALFORMED_RESPONSE", false],
   ];
   for (const [label, mocked, code, retryable] of cases) {
     await assert.rejects(() => fileInfoSession(mocked).fileInfo("safe-ident"), (error) => { assertSafeFileInfoError(error, code, retryable); return true; }, label);
   }
 });
 test("fileInfo sends one authenticated bounded request and returns validated metadata", async () => { const calls = []; const result = await fileInfoSession(fileInfoOk(), calls).fileInfo("safe-ident"); assert.equal(result.name[0], "movie.mkv"); assert.equal(calls.length, 1); assert.match(calls[0].url, /\/api\/file_info\/$/); assert.match(calls[0].body, /ident=safe-ident/); assert.match(calls[0].body, /maybe_removed=1/); assert.equal(calls[0].options.maxContentLength, 64 * 1024); });
+test("fileInfo accepts Webshare's authoritative removed-file state", async () => { const result = await fileInfoSession(fileInfoOk("<name>movie.mkv</name><available>1</available><removed>1</removed>")).fileInfo("removed-ident"); assert.equal(result.available[0], "1"); assert.equal(result.removed[0], "1"); });
 test("adapter integrates with B9 evidence port without retries", async (t) => { const root = fs.mkdtempSync(path.join(os.tmpdir(), "webshare-transport-")); t.after(() => fs.rmSync(root, { recursive: true, force: true })); const calls = []; const s = session(ok(true), calls); const config = createFilesExistConfig({ root, idents: ["abc"], limits: { maxIdents: 1, maxRequests: 1, maxDurationMs: 10000 } }); const result = await runFilesExistEvidence(config, s); assert.equal(result.manifest.checked, 1); assert.equal(result.manifest.exists, 1); assert.equal(calls.length, 1); const evidence = JSON.parse(fs.readFileSync(config.paths.evidence, "utf8")); assert.deepEqual(Object.keys(evidence.records[0]).sort(), ["checked_at", "exists", "ident", "response_status", "retryable", "transport_error"].sort()); });

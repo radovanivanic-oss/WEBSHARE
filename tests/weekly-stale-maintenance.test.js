@@ -43,6 +43,28 @@ function runDeps(root, current, checked, changed = false) {
   };
 }
 
+test("authoritative file_info removal is immediately actionable while exact file_link evidence is recognized", async () => {
+  const session = {
+    filesExistBatch: async (idents) => ({ status: 200, files: idents.map((ident) => ({ ident, exists: false, downloadable: false })) }),
+    fileInfo: async () => ({ name: ["removed.mkv"], available: ["1"], removed: ["1"] }),
+  };
+  const result = await weekly.checkIdents({ idents: ["gone"], session, maxRetries: 1 });
+  assert.equal(result.records[0].status, weekly.STATUS.MISSING);
+  assert.equal(result.records[0].permanent_missing, true);
+  assert.equal(result.records[0].missing_evidence, "FILE_INFO_REMOVED");
+  assert.equal(weekly.isAuthoritativePermanentMissing({ code: "FILE_LINK_FATAL_1", message: "File not found" }), true);
+});
+
+test("file_info transport uncertainty remains unresolved and creates no permanent evidence", async () => {
+  const session = {
+    filesExistBatch: async (idents) => ({ status: 200, files: idents.map((ident) => ({ ident, exists: false, downloadable: false })) }),
+    fileInfo: async () => { throw Object.assign(new Error("temporary"), { code: "RATE_LIMITED", retryable: true, status: 429 }); },
+  };
+  const result = await weekly.checkIdents({ idents: ["uncertain"], session, maxRetries: 1 });
+  assert.equal(result.records[0].status, weekly.STATUS.UNRESOLVED);
+  assert.equal(result.records[0].permanent_missing, undefined);
+});
+
 test("weekly bucket selection is deterministic and Europe/Bratislava based", () => {
   assert.equal(weekly.selectBucketForDate(new Date("2026-09-04T22:30:00Z")).bucket, weekly.selectBucketForDate(new Date("2026-09-05T00:30:00Z")).bucket);
   assert.equal(weekly.selectBucketForDate(new Date("2026-09-04T12:00:00Z")).time_zone, "Europe/Bratislava");
@@ -92,6 +114,31 @@ test("no-change weekly run does not publish", async () => {
     const result = await weekly.runWeeklyStaleMaintenance({ stateRoot: root, runsRoot: path.join(root, "runs"), databasePath: "fixture.sqlite", sidecarPath: "fixture.json", now: NOW, runId: "run-2" }, deps);
     assert.equal(result.status, "NO_CHANGES");
     assert.equal(deps.published, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("normal stale runs advance four sequential buckets so the oldest unchecked bucket cannot starve", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "weekly-stale-buckets-"));
+  try {
+    const state = stateWith();
+    state.last_successful_run = { bucket: 5 };
+    fs.writeFileSync(path.join(root, "state.json"), JSON.stringify(state));
+    const deps = runDeps(root, [], {});
+    const result = await weekly.runWeeklyStaleMaintenance({ stateRoot: root, runsRoot: path.join(root, "runs"), databasePath: "fixture.sqlite", sidecarPath: "fixture.json", now: NOW, runId: "run-buckets" }, deps);
+    assert.deepEqual(result.buckets, [6, 7, 8, 9]);
+    assert.equal(result.selection.scheduling_policy, "oldest-unchecked-sequential");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("authoritative removal deactivates a new source without waiting for a second strike", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "weekly-stale-definitive-"));
+  try {
+    const gone = row("gone-now");
+    const deps = runDeps(root, [gone], { "gone-now": { ...record("gone-now", weekly.STATUS.MISSING), permanent_missing: true, missing_evidence: "FILE_INFO_REMOVED" } }, true);
+    deps.loadBucketRows = () => ({ rows: [gone], eligible_count: 1, excluded: { b39_hits: 0 } });
+    const result = await weekly.runWeeklyStaleMaintenance({ stateRoot: root, runsRoot: path.join(root, "runs"), databasePath: "fixture.sqlite", sidecarPath: "fixture.json", observationRoot: "fixture-observations", publicRepository: "fixture-public", now: NOW, runId: "run-definitive", bucket: 0 }, deps);
+    assert.equal(result.deactivated, 1);
+    assert.deepEqual(result.deactivation_idents, ["gone-now"]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -1194,7 +1194,7 @@ class WebshareSession {
       const body = parseStatus(parsed, "file_info");
       const value = (field) => Array.isArray(body[field]) && body[field].length === 1 ? String(body[field][0]) : null;
       const available = value("available"), removed = value("removed");
-      if (value("name") === null || !["0", "1"].includes(available) || !["0", "1"].includes(removed) || (available === "1" && removed === "1")) throw Object.assign(new Error("Malformed file_info response fields"), { code: "MALFORMED_RESPONSE", retryable: false });
+      if (value("name") === null || !["0", "1"].includes(available) || !["0", "1"].includes(removed)) throw Object.assign(new Error("Malformed file_info response fields"), { code: "MALFORMED_RESPONSE", retryable: false });
       return body;
     }, { signal: options.signal });
   }
