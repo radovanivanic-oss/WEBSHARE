@@ -163,3 +163,24 @@ test("failed publication plans are rebuilt from the committed current database",
     assert.deepEqual(events, ["observe", "supersede", "prepare-current", "authorize-publication", "publish", "prepare"]);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
+
+test("rolled-back publication plans are also recovered from the committed current database", async () => {
+  const f = fixture();
+  try {
+    const events = [];
+    const maintenanceRoot = path.join(f.root, "maintenance");
+    const pendingRoot = path.join(maintenanceRoot, "rolled-back-cycle");
+    fs.mkdirSync(pendingRoot, { recursive: true });
+    fs.writeFileSync(path.join(pendingRoot, "state.json"), JSON.stringify({ state: "PUBLICATION_FAILED", failure: { rollback: true } }));
+    fs.writeFileSync(path.join(pendingRoot, "publication-plan.json"), JSON.stringify({ generation_id: "stale-generation" }));
+    fs.writeFileSync(path.join(pendingRoot, "apply-result.json"), JSON.stringify({ inserted_files: 1, postflight: { production_baseline_sha256: "before" } }));
+    const deps = baseDependencies(f, events);
+    deps.supersedeFailedPublication = async () => { events.push("supersede"); };
+    deps.prepareCurrentPublication = async () => { events.push("prepare-current"); return { root: path.join(maintenanceRoot, "recovery"), publicationPlan: { generation_id: "fresh-generation" } }; };
+    deps.authorizePublication = async () => { events.push("authorize-publication"); };
+    deps.publish = async () => { events.push("publish"); return { publicationResult: { result: { generation_id: "fresh-generation" } } }; };
+    const result = await runAutomaticProductionMaintenance({ now: "2026-09-08T01:26:00.000Z", statusRoot: f.root, maintenanceRoot, dependencies: deps });
+    assert.equal(result.last_publication.generation_id, "fresh-generation");
+    assert.deepEqual(events, ["observe", "supersede", "prepare-current", "authorize-publication", "publish", "prepare"]);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
