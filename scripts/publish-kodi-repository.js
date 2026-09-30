@@ -193,7 +193,12 @@ function publish(options) {
   cleanRepository(publicRepository);
   const built = build(options);
   if (options.dryRun) return { ...built, published: false };
-  for (const file of built.files) writeIfUnchangedOrNew(path.join(publicRepository, file.relativePath), file.bytes);
+  const mutableGeneratedFiles = new Set(["index.html", "addons.xml", "addons.xml.md5"]);
+  for (const file of built.files) {
+    const target = path.join(publicRepository, file.relativePath);
+    if (mutableGeneratedFiles.has(file.relativePath)) writeGeneratedFile(target, file.bytes);
+    else writeIfUnchangedOrNew(target, file.bytes);
+  }
   const currentRootInstaller = built.manifest.repository_addon.root_zip;
   const obsoleteRootInstallers = fs.readdirSync(publicRepository)
     .filter((name) => /^repository\.websharecrawler-\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\.zip$/u.test(name) && name !== currentRootInstaller)
@@ -207,7 +212,7 @@ function publish(options) {
     run("git", ["-C", publicRepository, "push", "origin", "main"]);
   }
   let shortSite;
-  if (options.shortPublicRepository) {
+  if (options.shortPublicRepository && fs.existsSync(options.shortPublicRepository)) {
     const shortPublicRepository = options.shortPublicRepository;
     cleanRepository(shortPublicRepository);
     writeGeneratedFile(path.join(shortPublicRepository, "index.html"), Buffer.from("<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>Webshare Atlas Kodi</title></head>\n<body><a href=\"" + currentRootInstaller + "\">" + currentRootInstaller + "</a></body></html>\n", "utf8"));
@@ -223,6 +228,8 @@ function publish(options) {
       if (options.push !== false) run("git", ["-C", shortPublicRepository, "push", "origin", "main"]);
     }
     shortSite = { shortPublicRepository, published: Boolean(shortStaged), publicCommit: run("git", ["-C", shortPublicRepository, "rev-parse", "HEAD"]) };
+  } else if (options.shortPublicRepository) {
+    shortSite = { shortPublicRepository: options.shortPublicRepository, published: false, skipped: "optional-repository-not-present" };
   }
   return { ...built, publicRepository, published: Boolean(staged), publicCommit: run("git", ["-C", publicRepository, "rev-parse", "HEAD"]), shortSite };
 }
@@ -233,7 +240,7 @@ function main(argv = process.argv.slice(2)) {
   const publicRepository = path.resolve(parseArgument(argv, "--public-repository", process.env.KODI_PUBLIC_REPOSITORY || DEFAULT_PUBLIC_REPOSITORY));
   const shortPublicRepository = path.resolve(parseArgument(argv, "--short-public-repository", process.env.KODI_SHORT_PUBLIC_REPOSITORY || DEFAULT_SHORT_PUBLIC_REPOSITORY));
   const publicBase = parseArgument(argv, "--public-base", process.env.KODI_PUBLIC_BASE || DEFAULT_PUBLIC_BASE);
-  const videoVersion = parseArgument(argv, "--video-version", "0.8.25");
+  const videoVersion = parseArgument(argv, "--video-version", "0.8.26");
   const timestamp = new Date().toISOString().replace(/[-:]/gu, "").replace(/\.\d{3}Z$/u, "Z");
   const outputRoot = path.resolve(parseArgument(argv, "--output-root", path.join(repositoryRoot, "runtime", "kodi-public-distribution", timestamp)));
   const options = { repositoryRoot, publicRepository, shortPublicRepository, publicBase, videoVersion, outputRoot, dryRun: hasFlag(argv, "--dry-run"), push: !hasFlag(argv, "--no-push") };

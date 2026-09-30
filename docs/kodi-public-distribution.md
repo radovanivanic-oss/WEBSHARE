@@ -10,14 +10,14 @@ https://radovanivanic-oss.github.io/AG_repo/
 The existing Kodi repository addon ID is preserved as
 `repository.websharecrawler` for upgrade compatibility. Its display name is
 Webshare Atlas Repository. The video addon remains
-`plugin.video.websharecrawler`, currently version `0.8.25`.
+`plugin.video.websharecrawler`, currently version `0.8.26`.
 
 ## Install
 
 Download the repository ZIP:
 
 ```text
-https://radovanivanic-oss.github.io/AG_repo/repository.websharecrawler/repository.websharecrawler-1.0.6.zip
+https://radovanivanic-oss.github.io/AG_repo/repository.websharecrawler/repository.websharecrawler-1.0.8.zip
 ```
 
 In Kodi, open Settings → Add-ons → Install from zip file. Enable Unknown
