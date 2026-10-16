@@ -41,7 +41,7 @@ async function main() {
   rotateBoundedLog(process.env.PRODUCTION_LEGACY_LOG || path.join(process.cwd(), "runtime/webshare-crawler.log"));
   const result = await runAutomaticProductionMaintenance();
   console.log(JSON.stringify(result, null, 2));
-  if (result.status === "DISCOVERY_FAILED") process.exitCode = 1;
+  if (["DISCOVERY_FAILED", "DISK_GUARD_BLOCKED"].includes(result.status)) process.exitCode = 1;
 }
 
 main().catch((error) => {
