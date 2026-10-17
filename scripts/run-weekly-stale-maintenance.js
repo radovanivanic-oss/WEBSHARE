@@ -4,6 +4,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const weekly = require("../lib/weekly-stale-maintenance");
+const { applyRetention, retentionPlan } = require("../lib/runtime-retention");
 
 function loadDotEnv(file = path.resolve(".env")) {
   if (!fs.existsSync(file)) return;
@@ -36,7 +37,27 @@ async function main() {
   if (!process.env.MAINTENANCE_PUBLICATION_ADAPTER) process.env.MAINTENANCE_PUBLICATION_ADAPTER = path.join(process.cwd(), "lib/maintenance-publication-adapter.js");
   const logFile = path.resolve(process.env.STALE_WEEKLY_LOG || "runtime/stale-weekly/weekly.log");
   rotateLog(logFile);
+  let retention = { deleted_count: 0, deleted_bytes: 0, kept_count: 0, skipped_referenced_count: 0 };
+  try {
+    const plan = retentionPlan({
+      maintenanceRoot: path.resolve(process.env.MAINTENANCE_CYCLES_ROOT || "runtime/maintenance-cycles"),
+      staleRoot: path.resolve(process.env.STALE_WEEKLY_RUNS_ROOT || "runtime/stale-weekly/runs"),
+      publicRepository: path.resolve(process.env.PUBLIC_KODI_REPOSITORY || "/home/radeco/ag"),
+    });
+    const applied = applyRetention(plan);
+    retention = {
+      generation_id: plan.generationId,
+      pointer_unavailable: Boolean(plan.pointer_unavailable),
+      deleted_count: applied.deleted.length,
+      deleted_bytes: applied.deleted.reduce((sum, row) => sum + row.bytes, 0),
+      kept_count: plan.kept.length,
+      skipped_referenced_count: plan.skipped_referenced.length,
+    };
+  } catch (error) {
+    retention = { deleted_count: 0, deleted_bytes: 0, error: weekly.safeError(error) };
+  }
   const result = await weekly.runWeeklyStaleMaintenance({ stateRoot: process.env.STALE_WEEKLY_STATE_ROOT, runsRoot: process.env.STALE_WEEKLY_RUNS_ROOT, databasePath: process.env.PRODUCTION_DATABASE_PATH, sidecarPath: process.env.B39_SIDECAR_PATH, observationRoot: process.env.DAILY_OBSERVATION_ROOT, publicRepository: process.env.PUBLIC_KODI_REPOSITORY, generationId: process.env.STALE_GENERATION_ID }, { logger: logger(logFile) });
+  result.retention = retention;
   console.log(JSON.stringify(result, null, 2));
   return result;
 }

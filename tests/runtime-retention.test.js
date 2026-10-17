@@ -77,3 +77,28 @@ test("retention deletes only explicitly superseded maintenance cycles", () => {
   const plan = retentionPlan({ maintenanceRoot, staleRoot: path.join(root, "stale"), publicRepository });
   assert.deepEqual(plan.delete.map((row) => row.name), ["superseded-recovery"]);
 });
+
+
+test("retention bounds terminal no-op cycles and nested stale completions", () => {
+  const root = tempRoot();
+  const maintenanceRoot = path.join(root, "maintenance");
+  const staleRoot = path.join(root, "stale");
+  const publicRepository = path.join(root, "public");
+  writeJson(path.join(publicRepository, "catalog/v1/current.json"), { generation_id: "current-generation" });
+  for (let index = 0; index < 3; index += 1) {
+    writeJson(path.join(maintenanceRoot, "no-op-" + index, "state.json"), { state: "NO_ELIGIBLE_ITEMS", updated_at: "2026-09-0" + (index + 1) + "T00:00:00Z" });
+  }
+  writeJson(path.join(staleRoot, "runs", "new", "result.json"), { status: "COMPLETED", finished_at: "2026-09-03T00:00:00Z" });
+  writeJson(path.join(staleRoot, "runs", "old", "publication-cycle", "state.json"), { state: "COMPLETE", created_at: "2026-09-01T00:00:00Z" });
+
+  const plan = retentionPlan({ maintenanceRoot, staleRoot, publicRepository, keepComplete: 1, keepStaleComplete: 1 });
+  assert.deepEqual(plan.delete.map((row) => row.name).sort(), ["no-op-0", "no-op-1", "old"]);
+});
+
+test("retention refuses to prune when the published pointer is unavailable", () => {
+  const root = tempRoot();
+  writeJson(path.join(root, "maintenance", "old", "state.json"), { state: "NO_ELIGIBLE_ITEMS", updated_at: "2026-09-01T00:00:00Z" });
+  const plan = retentionPlan({ maintenanceRoot: path.join(root, "maintenance"), staleRoot: path.join(root, "stale"), publicRepository: path.join(root, "public") });
+  assert.equal(plan.pointer_unavailable, true);
+  assert.equal(plan.delete.length, 0);
+});
