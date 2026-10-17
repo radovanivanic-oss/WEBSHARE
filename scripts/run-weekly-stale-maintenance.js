@@ -4,7 +4,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const weekly = require("../lib/weekly-stale-maintenance");
-const { applyRetention, retentionPlan } = require("../lib/runtime-retention");
+const { applyRetention, DEFAULT_RETENTION_DAYS, retentionPlan } = require("../lib/runtime-retention");
 
 function loadDotEnv(file = path.resolve(".env")) {
   if (!fs.existsSync(file)) return;
@@ -43,6 +43,7 @@ async function main() {
       maintenanceRoot: path.resolve(process.env.MAINTENANCE_CYCLES_ROOT || "runtime/maintenance-cycles"),
       staleRoot: path.resolve(process.env.STALE_WEEKLY_RUNS_ROOT || "runtime/stale-weekly/runs"),
       publicRepository: path.resolve(process.env.PUBLIC_KODI_REPOSITORY || "/home/radeco/ag"),
+      retentionDays: DEFAULT_RETENTION_DAYS,
     });
     const applied = applyRetention(plan);
     retention = {

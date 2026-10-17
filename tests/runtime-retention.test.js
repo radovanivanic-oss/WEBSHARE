@@ -95,6 +95,28 @@ test("retention bounds terminal no-op cycles and nested stale completions", () =
   assert.deepEqual(plan.delete.map((row) => row.name).sort(), ["no-op-0", "no-op-1", "old"]);
 });
 
+test("retention can keep a seven-day window without deleting unresolved recovery", () => {
+  const root = tempRoot();
+  const maintenanceRoot = path.join(root, "maintenance");
+  const publicRepository = path.join(root, "public");
+  writeJson(path.join(publicRepository, "catalog/v1/current.json"), { generation_id: "current-generation" });
+  writeJson(path.join(maintenanceRoot, "recent", "state.json"), { state: "COMPLETE", updated_at: "2026-10-12T00:00:00Z" });
+  writeJson(path.join(maintenanceRoot, "old", "state.json"), { state: "COMPLETE", updated_at: "2026-10-01T00:00:00Z" });
+  writeJson(path.join(maintenanceRoot, "recovery", "state.json"), { state: "PUBLICATION_RECOVERY_READY", updated_at: "2026-09-01T00:00:00Z" });
+
+  const plan = retentionPlan({
+    maintenanceRoot,
+    staleRoot: path.join(root, "stale"),
+    publicRepository,
+    retentionDays: 7,
+    now: "2026-10-17T00:00:00Z",
+  });
+  assert.deepEqual(plan.delete.map((row) => row.name), ["old"]);
+  const result = applyRetention(plan);
+  assert.equal(result.deleted.length, 1);
+  assert.equal(fs.existsSync(path.join(maintenanceRoot, "recent")), true);
+  assert.equal(fs.existsSync(path.join(maintenanceRoot, "recovery")), true);
+});
 test("retention refuses to prune when the published pointer is unavailable", () => {
   const root = tempRoot();
   writeJson(path.join(root, "maintenance", "old", "state.json"), { state: "NO_ELIGIBLE_ITEMS", updated_at: "2026-09-01T00:00:00Z" });
