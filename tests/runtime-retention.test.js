@@ -53,3 +53,27 @@ test("disk preflight blocks a large snapshot below the reserve", () => {
     fs.statfsSync = original;
   }
 });
+
+test("retention enumerates stale runs below the production runs directory", () => {
+  const root = tempRoot();
+  const staleRoot = path.join(root, "stale");
+  const publicRepository = path.join(root, "public");
+  writeJson(path.join(staleRoot, "runs", "new", "result.json"), { status: "COMPLETED", finished_at: "2026-09-02T00:00:00Z" });
+  writeJson(path.join(staleRoot, "runs", "old", "result.json"), { status: "COMPLETED", finished_at: "2026-09-01T00:00:00Z" });
+  writeJson(path.join(publicRepository, "catalog/v1/current.json"), { generation_id: "current-generation" });
+  const plan = retentionPlan({ maintenanceRoot: path.join(root, "maintenance"), staleRoot, publicRepository, keepComplete: 0, keepStaleComplete: 1 });
+  assert.equal(plan.delete.length, 1);
+  assert.equal(plan.delete[0].name, "old");
+  assert.equal(plan.delete[0].directory, path.join(staleRoot, "runs", "old"));
+});
+
+test("retention deletes only explicitly superseded maintenance cycles", () => {
+  const root = tempRoot();
+  const maintenanceRoot = path.join(root, "maintenance");
+  const publicRepository = path.join(root, "public");
+  writeJson(path.join(maintenanceRoot, "superseded-recovery", "state.json"), { state: "PUBLICATION_ROLLED_BACK", updated_at: "2026-09-01T00:00:00Z", failure: { superseded: true, reason: "CURRENT_PRODUCTION_SOURCE_ADVANCED" } });
+  writeJson(path.join(maintenanceRoot, "unresolved", "state.json"), { state: "PUBLICATION_RECOVERY_READY", updated_at: "2026-09-02T00:00:00Z" });
+  writeJson(path.join(publicRepository, "catalog/v1/current.json"), { generation_id: "current-generation" });
+  const plan = retentionPlan({ maintenanceRoot, staleRoot: path.join(root, "stale"), publicRepository });
+  assert.deepEqual(plan.delete.map((row) => row.name), ["superseded-recovery"]);
+});

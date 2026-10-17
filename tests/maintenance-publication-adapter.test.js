@@ -41,3 +41,8 @@ test("B55 representative selection is deterministic by category", () => {
   ];
   assert.deepEqual(a.representativeRows({ records: rows }).map((x) => x.category), ["movies", "series", "sports"]);
 });
+
+test("secondary GitHub rate limits fail fast instead of retrying uploads", () => {
+  assert.equal(a.isSecondaryRateLimitError({ detail: "HTTP 403: You have exceeded a secondary rate limit." }), true);
+  assert.equal(a.isSecondaryRateLimitError({ detail: "temporary network failure" }), false);
+});
