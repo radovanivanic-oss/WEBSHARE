@@ -42,6 +42,43 @@ test("B54 state machine accepts the guarded happy-path and rejects illegal trans
   }
 });
 
+test("B54 completed publication compacts local snapshots but preserves audit state", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "b54-compaction-"));
+  try {
+    write(path.join(root, "state.json"), { cycle_id: "compaction-fixture", state: m.STATES.COMPLETE, next_action: "none" });
+    write(path.join(root, "publication-result.json"), { kind: "B54_PUBLICATION_RESULT", result: { generation_id: "fixture-generation" } });
+    for (const name of [".source-observations", "backup", "publication-source", "publication-candidate"]) {
+      fs.mkdirSync(path.join(root, name), { recursive: true });
+      fs.writeFileSync(path.join(root, name, "payload.bin"), "snapshot");
+    }
+    const result = m.compactCompletedCycle(root);
+    assert.equal(result.status, "COMPACTED");
+    assert.equal(result.removed.length, 4);
+    for (const name of [".source-observations", "backup", "publication-source", "publication-candidate"]) assert.equal(fs.existsSync(path.join(root, name)), false, name);
+    assert.equal(fs.existsSync(path.join(root, "state.json")), true);
+    assert.equal(fs.existsSync(path.join(root, "publication-result.json")), true);
+    assert.equal(fs.existsSync(path.join(root, "compaction.json")), true);
+    assert.equal(m.compactCompletedCycle(root).status, "ALREADY_COMPACTED");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("B54 compaction never removes unresolved publication artifacts", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "b54-compaction-failed-"));
+  try {
+    write(path.join(root, "state.json"), { cycle_id: "failed-fixture", state: m.STATES.PUBLICATION_FAILED, next_action: "rollback-publication" });
+    write(path.join(root, "publication-result.json"), { kind: "B54_PUBLICATION_RESULT" });
+    fs.mkdirSync(path.join(root, "publication-source"), { recursive: true });
+    fs.writeFileSync(path.join(root, "publication-source", "payload.bin"), "keep");
+    const result = m.compactCompletedCycle(root);
+    assert.equal(result.status, "SKIPPED");
+    assert.equal(result.reason, "NOT_COMPLETE");
+    assert.equal(fs.existsSync(path.join(root, "publication-source", "payload.bin")), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 test("B54 isolated demonstration produces an auditable frozen lifecycle without real mutation", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "b54-demo-"));
   try {
