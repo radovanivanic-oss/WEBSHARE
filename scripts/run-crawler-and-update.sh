@@ -50,7 +50,12 @@ mapfile -t CRAWL_EXPORT_PATHS < <(
 const fs = require("fs");
 
 const resultPath = process.argv[2];
-const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+const raw = fs.readFileSync(resultPath, "utf8");
+const jsonStart = raw.indexOf("{");
+if (jsonStart < 0) {
+  throw new Error("Crawler nevrátil JSON výsledok.");
+}
+const result = JSON.parse(raw.slice(jsonStart));
 const inputPath = result?.export?.outputPath;
 const manifestPath = result?.export?.manifestPath;
 if (!inputPath || !manifestPath) {
