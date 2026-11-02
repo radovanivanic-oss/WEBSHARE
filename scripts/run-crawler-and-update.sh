@@ -79,3 +79,58 @@ fi
 node scripts/update-catalog-database.js \
   --input "${CRAWL_EXPORT_PATHS[0]}" \
   --manifest "${CRAWL_EXPORT_PATHS[1]}"
+
+# A failed prefix is not the same as a blocked/unproven prefix.  Retry the
+# transient failures once so a rate-limit or short network outage does not
+# permanently exclude a part of the catalogue from the current update.
+FAILED_COUNT="$(node - "$CRAWL_RESULT_FILE" <<'NODE'
+const fs = require("fs");
+
+const raw = fs.readFileSync(process.argv[2], "utf8");
+const jsonStart = raw.indexOf("{");
+if (jsonStart < 0) throw new Error("Crawler nevrátil JSON výsledok.");
+const result = JSON.parse(raw.slice(jsonStart));
+const failed = Number(result?.run?.failed_count ?? 0);
+if (!Number.isInteger(failed) || failed < 0) {
+  throw new Error("Crawler vrátil neplatný počet failed prefixov.");
+}
+process.stdout.write(String(failed));
+NODE
+ )"
+
+RETRY_FAILED_ONCE="${CRAWLER_RETRY_FAILED_ONCE:-true}"
+if [[ "$FAILED_COUNT" -gt 0 && "$RETRY_FAILED_ONCE" == "true" ]]; then
+  echo "Crawler má ${FAILED_COUNT} failed prefixov; spúšťam jeden retry priechod." >&2
+  RETRY_RESULT_FILE="$(mktemp runtime/crawler-retry-result.XXXXXX.json)"
+  trap 'rm -f "$CRAWL_RESULT_FILE" "$RETRY_RESULT_FILE"' EXIT
+  node main.js --retry-failed > "$RETRY_RESULT_FILE"
+
+  mapfile -t RETRY_EXPORT_PATHS < <(
+    node - "$RETRY_RESULT_FILE" <<'NODE'
+const fs = require("fs");
+
+const resultPath = process.argv[2];
+const raw = fs.readFileSync(resultPath, "utf8");
+const jsonStart = raw.indexOf("{");
+if (jsonStart < 0) {
+  throw new Error("Retry crawler nevrátil JSON výsledok.");
+}
+const result = JSON.parse(raw.slice(jsonStart));
+const inputPath = result?.export?.outputPath;
+const manifestPath = result?.export?.manifestPath;
+if (!inputPath || !manifestPath) {
+  throw new Error("Retry crawler nevrátil cestu k exportu a manifestu.");
+}
+process.stdout.write(`${inputPath}\n${manifestPath}\n`);
+NODE
+  )
+
+  if [[ "${#RETRY_EXPORT_PATHS[@]}" -ne 2 ]]; then
+    echo "Retry crawler vrátil neplatné exportné cesty." >&2
+    exit 1
+  fi
+
+  node scripts/update-catalog-database.js \
+    --input "${RETRY_EXPORT_PATHS[0]}" \
+    --manifest "${RETRY_EXPORT_PATHS[1]}"
+fi

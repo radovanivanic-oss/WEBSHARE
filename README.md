@@ -99,7 +99,9 @@ full-text dotazoch hlási falošne nízky `total=1000`, wrapper používa bounde
 best-effort stránkovanie do offsetu 10 000 (`CRAWLER_MAX_PAGES_PER_PREFIX=110`).
 Výsledky sa deduplikujú a importujú inkrementálne, ale manifest zostáva
 `incomplete`: verejné Webshare API neposkytuje dôkaz, že takýto zber pokryl celý
-katalóg.
+katalóg. Wrapper po bežnom crawle ešte raz automaticky skúsi transientne
+`failed` prefixy (`CRAWLER_RETRY_FAILED_ONCE=true`); `blocked` prefixy sa
+nepretláčajú do falošného stavu complete.
 
 ## Cron
 
