@@ -94,7 +94,12 @@ node main.js --status
 ```
 
 Wrapper spúšťa inkrementálny `--crawl`; full reconciliation ani deaktivácia starých
-súborov nie sú povolené bez bezpečného manifestu.
+súborov nie sú povolené bez bezpečného manifestu. Keďže Webshare pri širokých
+full-text dotazoch hlási falošne nízky `total=1000`, wrapper používa bounded
+best-effort stránkovanie do offsetu 10 000 (`CRAWLER_MAX_PAGES_PER_PREFIX=110`).
+Výsledky sa deduplikujú a importujú inkrementálne, ale manifest zostáva
+`incomplete`: verejné Webshare API neposkytuje dôkaz, že takýto zber pokryl celý
+katalóg.
 
 ## Cron
 

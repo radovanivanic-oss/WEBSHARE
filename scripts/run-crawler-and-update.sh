@@ -19,6 +19,12 @@ if [[ -s "$NVM_DIR/nvm.sh" ]]; then
   . "$NVM_DIR/nvm.sh"
 fi
 
+# Webshare reports a capped total but still serves additional offset pages.
+# Continue through that bounded window for discovery, while the manifest stays
+# explicitly incomplete because the provider does not prove completeness.
+export CRAWLER_BEST_EFFORT_SEARCH=true
+export CRAWLER_MAX_PAGES_PER_PREFIX=110
+
 set -a
 # shellcheck disable=SC1091
 if [[ ! -f .env ]]; then

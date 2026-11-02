@@ -490,6 +490,29 @@ test("server result cap blocks even when the returned page is short", () => {
   assert.equal(decision.reason, "unsupported_character_partition");
 });
 
+test("best-effort capped search continues pages and stops at an empty page", () => {
+  const algorithm = buildAlgorithmConfig({
+    roots: ["a"],
+    pageSize: 2,
+    serverResultCap: 2,
+    bestEffortSearchContinuation: true,
+  });
+  const fullPage = validateSearchPage(
+    { total: 2, files: [{ ident: "one" }, { ident: "two" }] },
+    { pages_processed: 0, items_observed: 0, last_page_fingerprint: null, depth: 1 },
+    algorithm
+  );
+  assert.equal(fullPage.action, "continue");
+  assert.equal(fullPage.reason, "best_effort_cap_continuation");
+  const emptyPage = validateSearchPage(
+    { total: 0, files: [] },
+    { pages_processed: 10, items_observed: 20, last_page_fingerprint: fullPage.fingerprint, depth: 1 },
+    algorithm
+  );
+  assert.equal(emptyPage.action, "complete");
+  assert.equal(emptyPage.reason, "empty_page_after_unverified_search");
+});
+
 test("missing, impossible and premature totals cannot complete a prefix", () => {
   const algorithm = buildAlgorithmConfig({
     roots: ["a"],
@@ -1385,6 +1408,7 @@ test("algorithm fingerprint is canonical and covers correctness parameters", () 
     buildAlgorithmConfig({ pageSize: base.pageSize + 1 }),
     buildAlgorithmConfig({ maxDepth: base.maxDepth + 1 }),
     buildAlgorithmConfig({ maxPagesPerPrefix: base.maxPagesPerPrefix + 1 }),
+    buildAlgorithmConfig({ bestEffortSearchContinuation: true }),
     buildAlgorithmConfig({ partitionCharacters: ["x", "y"] }),
   ]) {
     assert.notEqual(
