@@ -38,7 +38,33 @@ command -v npm >/dev/null 2>&1 || {
 }
 
 node --check main.js
-# The crawler now requires an explicit mode.  The old no-argument call exited
-# with code 2, so cron never refreshed the catalog or reached the DB import.
-node main.js --crawl
-npm run catalog:update-db
+# The crawler now requires an explicit mode.  Keep the result JSON so that the
+# DB import consumes the export created by this exact run, rather than the
+# legacy runtime/catalog-items.jsonl file left by an older crawler.
+CRAWL_RESULT_FILE="$(mktemp runtime/crawler-result.XXXXXX.json)"
+trap 'rm -f "$CRAWL_RESULT_FILE"' EXIT
+node main.js --crawl > "$CRAWL_RESULT_FILE"
+
+mapfile -t CRAWL_EXPORT_PATHS < <(
+  node - "$CRAWL_RESULT_FILE" <<'NODE'
+const fs = require("fs");
+
+const resultPath = process.argv[2];
+const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+const inputPath = result?.export?.outputPath;
+const manifestPath = result?.export?.manifestPath;
+if (!inputPath || !manifestPath) {
+  throw new Error("Crawler nevrátil cestu k exportu a manifestu.");
+}
+process.stdout.write(`${inputPath}\n${manifestPath}\n`);
+NODE
+)
+
+if [[ "${#CRAWL_EXPORT_PATHS[@]}" -ne 2 ]]; then
+  echo "Crawler vrátil neplatné exportné cesty." >&2
+  exit 1
+fi
+
+node scripts/update-catalog-database.js \
+  --input "${CRAWL_EXPORT_PATHS[0]}" \
+  --manifest "${CRAWL_EXPORT_PATHS[1]}"

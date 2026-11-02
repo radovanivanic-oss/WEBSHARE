@@ -19,10 +19,32 @@ function runNode(script, args) {
   if (result.status !== 0) throw new Error(`${script} skončil s kódom ${result.status}.`);
 }
 
+function parseArguments(argv) {
+  const result = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (!value.startsWith("--")) continue;
+    const key = value.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+    const next = argv[index + 1];
+    if (next && !next.startsWith("--")) {
+      result[key] = next;
+      index += 1;
+    } else {
+      result[key] = true;
+    }
+  }
+  return result;
+}
+
 function main() {
+  const options = parseArguments(process.argv.slice(2));
   const config = getCatalogConfig();
-  const inputPath = path.join(config.runtimeDir, "catalog-items.jsonl");
-  const manifestPath = path.join(config.runtimeDir, "catalog-items.manifest.json");
+  const inputPath = path.resolve(
+    options.input || path.join(config.runtimeDir, "catalog-items.jsonl")
+  );
+  const manifestPath = path.resolve(
+    options.manifest || path.join(path.dirname(inputPath), "catalog-items.manifest.json")
+  );
   const lockPath = path.join(config.runtimeDir, "webshare-crawler.lock");
   if (fs.existsSync(lockPath)) throw new Error("Crawler práve beží; databázový import sa nespustí.");
   if (!fs.existsSync(inputPath)) throw new Error(`Chýba ${inputPath}.`);
