@@ -194,6 +194,90 @@ def metadata_second_fallback_language():
     return enum_setting("metadata_second_fallback_language", ["en-US", "cs-CZ", "sk-SK"], "en-US")
 
 
+def live_series_enabled():
+    return bool_setting("live_series_refresh", True)
+
+
+def live_series_ttl_seconds():
+    return max(1, int_setting("live_series_cache_ttl_hours", 6)) * 3600
+
+
+def live_series_cache_key(media_id):
+    return "live-series-files:{}".format(media_id)
+
+
+def normalized_live_title(value):
+    value = safe_text(value).lower()
+    value = re.sub(r"[^\w]+", " ", value, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def live_file_belongs_to_series(row, title):
+    """Keep spin-offs out: the filename prefix before SxxEyy must match exactly."""
+    expected = normalized_live_title(title)
+    actual = normalized_live_title(row.get("series_title"))
+    if not expected or not actual:
+        return False
+    if actual == expected:
+        return True
+    actual = actual.lstrip()
+    expected = expected.lstrip()
+    if actual.startswith("the "):
+        actual = actual[4:]
+    if expected.startswith("the "):
+        expected = expected[4:]
+    return actual == expected
+
+
+def load_live_series_files(media_id, detail):
+    if not live_series_enabled():
+        return []
+
+    title = detail.get("display_title") or detail.get("title") or ""
+    if not safe_text(title):
+        return []
+
+    key = live_series_cache_key(media_id)
+    try:
+        cached = store().metadata_get_many([key], live_series_ttl_seconds())
+    except Exception:
+        cached = {}
+    if isinstance(cached, dict) and key in cached:
+        payload = cached.get(key) or {}
+        return payload.get("files") or [] if isinstance(payload, dict) else []
+
+    try:
+        result = WebshareResolver(
+            username=setting("username"),
+            password=setting("password"),
+        ).search_series(title, max_files=1000)
+    except ResolverError:
+        return []
+    rows = [
+        row for row in result.get("files") or []
+        if isinstance(row, dict) and row.get("ident") and live_file_belongs_to_series(row, title)
+    ]
+    try:
+        store().metadata_set(
+            key,
+            {"query": title, "total": result.get("total") or 0, "files": rows},
+        )
+    except Exception:
+        pass
+    return rows
+
+
+def live_episode_groups(rows):
+    groups = {}
+    for row in rows or []:
+        season = safe_int(row.get("season_number"), -1)
+        episode = safe_int(row.get("episode_number"), -1)
+        if season < 0 or episode < 0:
+            continue
+        groups.setdefault((season, episode), []).append(row)
+    return groups
+
+
 def fallback_art():
     return os.path.join(ADDON.getAddonInfo("path"), "icon.png")
 
@@ -1258,11 +1342,14 @@ def api_detail_meta(detail, live_metadata):
         "poster": live_metadata.get("posterUrl") or detail.get("poster_url") or "",
         "backdrop": live_metadata.get("backdropUrl") or detail.get("backdrop_url") or "",
     }
-    return enrich_api_meta_from_tmdb_id(detail, meta)
+    meta = enrich_api_meta_from_tmdb_id(detail, meta)
+    return enrich_api_meta_from_tmdb_title(detail, meta)
 
 
 def api_media_seasons(media_id, detail, meta=None):
     meta = meta or api_detail_meta(detail, {})
+    live_files = load_live_series_files(media_id, detail)
+    live_groups = live_episode_groups(live_files)
     try:
         response = catalog_api().seasons(media_id) or {}
         seasons = response.get("data") or []
@@ -1270,13 +1357,20 @@ def api_media_seasons(media_id, detail, meta=None):
         notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
         seasons = []
 
-    if not seasons:
+    season_counts = {}
+    for season in seasons:
+        season_number = int(season.get("season_number") or 0)
+        season_counts[season_number] = int(season.get("episode_count") or 0)
+    for season_number in sorted({key[0] for key in live_groups}):
+        live_count = len([key for key in live_groups if key[0] == season_number])
+        season_counts[season_number] = max(season_counts.get(season_number, 0), live_count)
+
+    if not season_counts:
         api_media_season({"media_id": media_id})
         return
 
-    for season in seasons:
-        season_number = int(season.get("season_number") or 0)
-        episode_count = int(season.get("episode_count") or 0)
+    for season_number in sorted(season_counts):
+        episode_count = season_counts[season_number]
         label = "Séria {:02d}".format(season_number) if season_number else "Séria ?"
         if episode_count:
             label = "{} ({} epizód)".format(label, episode_count)
@@ -1328,12 +1422,124 @@ def api_media_season(params):
         notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
-    for episode in response.get("data", []):
-        add_api_media(episode)
+    static_episodes = response.get("data", []) or []
+    live_files = []
+    detail = {}
+    try:
+        detail = catalog_api().detail(media_id) or {}
+        live_files = load_live_series_files(media_id, detail)
+    except CatalogApiError:
+        detail = {}
+    live_groups = live_episode_groups(live_files)
+    live_keys = set()
+    for (season_number, episode_number), rows in sorted(live_groups.items()):
+        if str(season_number) != str(season):
+            continue
+        live_keys.add((season_number, episode_number))
+        add_live_episode(media_id, detail, season_number, episode_number, rows)
+    for episode in static_episodes:
+        key = (safe_int(episode.get("season_number")), safe_int(episode.get("episode_number")))
+        if key not in live_keys:
+            add_api_media(episode)
     pagination = response.get("pagination") or {}
-    add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_season", params, page)
+    live_for_requested_season = any(key[0] == safe_int(season, -1) for key in live_groups)
+    if not live_for_requested_season:
+        add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_season", params, page)
     xbmcplugin.setContent(HANDLE, "episodes")
     xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
+def add_live_episode(media_id, detail, season, episode, rows):
+    title = detail.get("display_title") or detail.get("title") or "Seriál"
+    episode_title = "{} S{:02d}E{:02d}".format(title, season, episode)
+    item = xbmcgui.ListItem(label=episode_title)
+    meta = api_detail_meta(detail, {})
+    plot = meta.get("overview") or "Popis epizódy nie je dostupný."
+    item.setInfo(
+        "video",
+        {
+            "title": episode_title,
+            "tvshowtitle": title,
+            "plot": plot,
+            "plotoutline": plot,
+            "year": safe_int(detail.get("year")),
+            "genre": ", ".join(safe_text_list(meta.get("genres"))),
+            "rating": safe_float(meta.get("rating")),
+            "season": season,
+            "episode": episode,
+            "mediatype": "episode",
+        },
+    )
+    item.setArt(
+        {
+            "poster": meta.get("poster") or detail.get("poster_url") or fallback_art(),
+            "thumb": meta.get("poster") or detail.get("poster_url") or fallback_art(),
+            "fanart": meta.get("backdrop") or detail.get("backdrop_url") or fallback_art(),
+        }
+    )
+    item.setProperty("plot", plot)
+    item.setProperty("description", plot)
+    item.setProperty("LiveWebshareSources", str(len(rows)))
+    xbmcplugin.addDirectoryItem(
+        HANDLE,
+        addon_url(
+            {
+                "action": "live_media_select",
+                "media_id": media_id,
+                "season": season,
+                "episode": episode,
+            }
+        ),
+        item,
+        isFolder=True,
+    )
+
+
+def live_media_select(params):
+    media_id = params.get("media_id")
+    season = safe_int(params.get("season"))
+    episode = safe_int(params.get("episode"))
+    try:
+        detail = catalog_api().detail(media_id) or {}
+        files = live_episode_groups(load_live_series_files(media_id, detail)).get((season, episode), [])
+    except CatalogApiError as exc:
+        notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        return
+
+    if not files:
+        notify("Pre túto epizódu už Webshare nevracia žiadny zdroj", xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        return
+
+    episode_detail = dict(detail)
+    episode_detail.update(
+        {
+            "media_type": "episode",
+            "title": detail.get("display_title") or detail.get("title") or "Seriál",
+            "season_number": season,
+            "episode_number": episode,
+        }
+    )
+    meta = api_detail_meta(detail, {})
+    items = []
+    rows = []
+    for file_row in sorted(files, key=variant_sort_key):
+        item, row = api_file_list_item(file_row, episode_detail, meta)
+        items.append(item)
+        rows.append(row)
+    heading = "{} S{:02d}E{:02d}".format(episode_detail["title"], season, episode)
+    if len(rows) == 1:
+        play_video({"ident": rows[0]["ident"], "title": heading})
+        return
+    try:
+        selected = xbmcgui.Dialog().select(heading, items, useDetails=True)
+    except TypeError:
+        selected = xbmcgui.Dialog().select(heading, items)
+    if selected is None or selected < 0 or selected >= len(rows):
+        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        return
+    play_video({"ident": rows[selected]["ident"], "title": heading})
 
 
 def enrich_api_meta_from_tmdb_id(detail, meta):
@@ -1360,6 +1566,60 @@ def enrich_api_meta_from_tmdb_id(detail, meta):
         data = client.fetch_movie_by_id(external_id)
     if not data:
         return meta
+
+    merged = dict(meta)
+    for target, source in (
+        ("title", "title"),
+        ("original_title", "original_title"),
+        ("overview", "overview"),
+        ("genres", "genres"),
+        ("rating", "rating"),
+        ("runtime", "runtime"),
+        ("countries", "countries"),
+        ("director", "director"),
+        ("cast", "cast"),
+        ("poster", "poster"),
+        ("backdrop", "backdrop"),
+    ):
+        if not merged.get(target) and data.get(source):
+            merged[target] = data[source]
+    return merged
+
+
+def enrich_api_meta_from_tmdb_title(detail, meta):
+    """Fill static catalog gaps when a series has no preassigned TMDb ID."""
+    if safe_text(meta.get("overview")) or detail.get("media_type") != "tv":
+        return meta
+    title = safe_text(detail.get("display_title") or detail.get("title"))
+    api_key = setting("tmdb_api_key")
+    if not title or not api_key:
+        return meta
+
+    client = TMDbClient(
+        api_key=api_key,
+        language=metadata_language(),
+        fallback_language=metadata_fallback_language(),
+        second_fallback_language=metadata_second_fallback_language(),
+    )
+    if not client.enabled():
+        return meta
+
+    cache_key = "tmdb-tv-title:{}:{}".format(metadata_language(), normalized_live_title(title))
+    try:
+        cached = store().metadata_get_many([cache_key], metadata_ttl_seconds())
+    except Exception:
+        cached = {}
+    if isinstance(cached, dict) and cache_key in cached:
+        data = cached.get(cache_key) or {}
+    else:
+        try:
+            data = client.fetch_tv_by_title(title, detail.get("year")) or {}
+        except Exception:
+            data = {}
+        try:
+            store().metadata_set(cache_key, data)
+        except Exception:
+            pass
 
     merged = dict(meta)
     for target, source in (
@@ -2253,6 +2513,7 @@ def router():
         "api_media_detail": lambda: api_media_detail(params),
         "api_media_select": lambda: api_media_select(params),
         "api_media_season": lambda: api_media_season(params),
+        "live_media_select": lambda: live_media_select(params),
         "show_file_name": lambda: show_file_name(params),
         "search_ident": search_ident,
         "recent_searches": recent_searches,

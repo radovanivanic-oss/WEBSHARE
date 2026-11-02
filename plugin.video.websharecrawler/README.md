@@ -9,6 +9,9 @@ Katalóg je odvodený read model. Obsahuje iba metadata, verejné identy súboro
 V nastaveniach stačí ponechať zapnuté `Používať verejný katalóg`. Interný API fallback a URL override sú dostupné iba v sekcii Expert / Vývojár.
 
 Webshare login a `api/file_link` resolver zostávajú v Kodi. Pri prehrávaní sa stále používa priame Webshare spojenie.
+Pri otvorení seriálu addon voliteľne prehľadá Webshare `/api/search/`, doplní chýbajúce
+sezóny a epizódy a výsledok uloží do lokálneho cache. Statický katalóg ostáva
+fallbackom pri výpadku služby.
 
 Webshare Atlas je Kodi video addon nad lokálnym exportom z Webshare crawlera.
 
@@ -35,12 +38,12 @@ Catalog
 - `addon.xml` - Kodi manifest a service registrácia.
 - `default.py` - menu, routing, listing, context menu a play flow.
 - `service.py` - priebežné ukladanie pozície počas prehrávania.
-- `resources/settings.xml` - verejný katalóg, Webshare login, TTL a stránkovanie; legacy URL override je iba v Expert / Vývojár.
+- `resources/settings.xml` - verejný katalóg, živé seriálové doplnenie, Webshare login, TTL a stránkovanie; legacy URL override je iba v Expert / Vývojár.
 - `resources/lib/catalog.py` - načítanie `.json.gz` alebo `.json`.
 - `resources/lib/indexer.py` - prvé indexovanie a preindexovanie katalógu.
 - `resources/lib/metadata.py` - odvodenie typu, kvality, roku, jazyka a epizód z názvu.
 - `resources/lib/store.py` - SQLite lokálny index, história, obľúbené, vyhľadávania.
-- `resources/lib/webshare.py` - Webshare WST login, `api/file_link` resolver a cache.
+- `resources/lib/webshare.py` - Webshare search, WST login, `api/file_link` resolver a cache.
 
 ## Menu
 
@@ -90,6 +93,8 @@ Priame download URL sa nepoužívajú; stream sa odovzdáva iba po
 ## Predvolené nastavenia
 
 - verejný statický katalóg: zapnutý
+- živé doplnenie seriálov z Webshare: zapnuté
+- cache živých seriálov: 6 hodín
 - Ubuntu/API URL: nie je potrebná pre bežnú prevádzku
 - resolver cache TTL: 6 hodín
 - stránkovanie: 50 položiek
@@ -124,7 +129,9 @@ Hotové:
 - pripnutie a skrytie položiek na hlavnej stránke
 - filmy / seriály / kvalita / roky / jazyk
 - Novinky iba podľa overeného TMDb `release_date`
-- živý popis a artwork cez serverovú TMDb proxy bez TMDb kľúča v Kodi
+- živý popis a artwork cez serverovú TMDb proxy; pre statické záznamy bez externého ID je voliteľný lokálny TMDb kľúč
+- doplnenie chýbajúcich sezón, epizód a variantov cez živé Webshare search API
+- oddelenie spin-offov presnou zhodou názvu seriálu pred označením SxxEyy
 - čisté technické názvy Webshare verzií s HDR, Dolby Vision, kodekmi, jazykom a veľkosťou
 - Žánre s bezpečným fallbackom na neznáme/neurčené
 - Dabing / titulky odvodené heuristicky z názvu súboru

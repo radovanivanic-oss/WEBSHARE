@@ -5,6 +5,7 @@ from __future__ import absolute_import, division, unicode_literals
 import hashlib
 import json
 import os
+import re
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -20,7 +21,8 @@ SALT_URL = BASE_URL + "/api/salt/"
 LOGIN_URL = BASE_URL + "/api/login/"
 FILE_LINK_URL = BASE_URL + "/api/file_link/"
 USER_DATA_URL = BASE_URL + "/api/user_data/"
-USER_AGENT = "AG Kino Kodi Addon/0.7.0"
+SEARCH_URL = BASE_URL + "/api/search/"
+USER_AGENT = "Webshare Atlas Kodi Addon/0.8.27"
 MD5_CRYPT_MAGIC = "$1$"
 ITOA64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
@@ -36,6 +38,79 @@ def _cache_dir():
 def _text(node, name, default=""):
     child = node.find(name)
     return child.text.strip() if child is not None and child.text else default
+
+
+def _int_text(node, name, default=0):
+    try:
+        return int(_text(node, name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _episode_parts(name):
+    """Extract the series prefix and SxxEyy pair from a Webshare filename."""
+    value = str(name or "")
+    match = re.search(
+        r"(?i)(?:^|[^a-z0-9])s(\d{1,3})\s*[._ -]*e(\d{1,3})(?!\d)",
+        value,
+    )
+    if not match:
+        match = re.search(
+            r"(?i)(?:^|[^a-z0-9])season\s*(\d{1,3})\s*[._ -]*(?:episode|ep)\s*(\d{1,3})(?!\d)",
+            value,
+        )
+    if not match:
+        return None, None, ""
+
+    prefix = value[: match.start()].strip(" ._-[]()")
+    prefix = re.sub(r"[._]+", " ", prefix)
+    prefix = re.sub(r"\s+", " ", prefix).strip()
+    return int(match.group(1)), int(match.group(2)), prefix
+
+
+def _search_file(node):
+    name = _text(node, "name")
+    season, episode, series_title = _episode_parts(name)
+    extension = ""
+    match = re.search(r"\.([a-z0-9]{2,5})$", name, re.IGNORECASE)
+    if match:
+        extension = match.group(1).lower()
+
+    lower_name = name.lower()
+    resolution = ""
+    resolution_match = re.search(r"(?<!\d)(2160|1440|1080|720|576|480|360)p?(?!\d)", name, re.IGNORECASE)
+    if resolution_match:
+        resolution = "{}p".format(resolution_match.group(1))
+
+    languages = []
+    for code in ("CZ", "SK", "EN", "PL", "DE", "HU"):
+        if re.search(r"(?i)(?:^|[. _+\[\]()\-]){}(?:$|[. _+\[\]()\-])".format(code), name):
+            languages.append(code)
+
+    return {
+        "ident": _text(node, "ident"),
+        "name": name,
+        "size": _int_text(node, "size"),
+        "type": _text(node, "type"),
+        "extension": extension,
+        "img": _text(node, "img"),
+        "stripe": _text(node, "stripe"),
+        "positive_votes": _int_text(node, "positive_votes"),
+        "negative_votes": _int_text(node, "negative_votes"),
+        "password": _text(node, "password", "0"),
+        "season_number": season,
+        "episode_number": episode,
+        "series_title": series_title,
+        "resolution": resolution,
+        "languages": languages,
+        "video_codec": "hevc" if re.search(r"(?i)(?:x|h)265|hevc", name) else "h264" if re.search(r"(?i)(?:x|h)264|avc", name) else "",
+        "audio_codec": "eac3" if "eac3" in lower_name or "ddp" in lower_name else "ac3" if "ac3" in lower_name or "dd5" in lower_name else "",
+        "source": "WEB-DL" if re.search(r"(?i)web[. -]?dl", name) else "WEBRip" if re.search(r"(?i)web[. -]?rip", name) else "BluRay" if re.search(r"(?i)blu[. -]?ray|bluray", name) else "",
+        "hdr": bool(re.search(r"(?i)(?:^|[. _\-])hdr(?:[. _\-]|$)", name)),
+        "dolby_vision": bool(re.search(r"(?i)(?:dv|dolby[. _-]?vision)", name)),
+        "has_dubbing": bool(re.search(r"(?i)dab(?:ing|ovan)|dubbed|dubbing", name)),
+        "has_subtitles": bool(re.search(r"(?i)titulky|sub(?:s|title)|forced", name)),
+    }
 
 
 def _post_xml(url, payload):
@@ -204,6 +279,83 @@ class WebshareResolver(object):
             link = self._file_link(ident, self._get_wst())
         self._set_cached_url(ident, link)
         return link
+
+    def search(self, query, limit=100, offset=0, sort="recent"):
+        """Search public Webshare files without mixing them into the catalog DB."""
+        query = str(query or "").strip()
+        if not query:
+            return {"total": 0, "files": []}
+
+        payload = {
+            "what": query,
+            "sort": sort or "recent",
+            "limit": max(1, min(100, int(limit))),
+            "offset": max(0, int(offset)),
+            "category": "video",
+        }
+        if self.username and self.password:
+            try:
+                payload["wst"] = self._get_wst()
+            except ResolverError:
+                # Search is also public; a broken login must not hide the
+                # anonymous results or make browsing unusable.
+                pass
+
+        try:
+            response = _post_xml(SEARCH_URL, payload)
+        except ResolverError as exc:
+            if "wst" not in payload or not self._looks_like_auth_error(exc):
+                raise
+            self._clear_wst()
+            try:
+                payload["wst"] = self._get_wst()
+                response = _post_xml(SEARCH_URL, payload)
+            except ResolverError:
+                payload.pop("wst", None)
+                response = _post_xml(SEARCH_URL, payload)
+        return {
+            "total": _int_text(response, "total"),
+            "files": [_search_file(node) for node in response.findall("file")],
+        }
+
+    def search_all(self, query, max_files=1000, page_size=100):
+        """Read all bounded search pages so a 100-result page cannot hide seasons."""
+        max_files = max(1, int(max_files))
+        page_size = max(1, min(100, int(page_size)))
+        rows = []
+        offset = 0
+        total = None
+        seen = set()
+        while len(rows) < max_files:
+            page = self.search(query, limit=min(page_size, max_files - len(rows)), offset=offset)
+            if total is None:
+                total = page.get("total") or 0
+            page_rows = page.get("files") or []
+            if not page_rows:
+                break
+            before = len(rows)
+            for row in page_rows:
+                ident = row.get("ident")
+                if ident and ident not in seen:
+                    seen.add(ident)
+                    rows.append(row)
+            offset += len(page_rows)
+            if len(rows) == before:
+                break
+            if len(page_rows) < page_size or offset >= int(total or 0):
+                break
+        return {"total": int(total or len(rows)), "files": rows[:max_files]}
+
+    def search_series(self, title, max_files=1000):
+        """Return only episode-shaped files; title matching is done by the addon."""
+        result = self.search_all(title, max_files=max_files)
+        return {
+            "total": result["total"],
+            "files": [
+                row for row in result["files"]
+                if row.get("season_number") is not None and row.get("episode_number") is not None
+            ],
+        }
 
     def check_account(self):
         token = self._get_wst(force=True)

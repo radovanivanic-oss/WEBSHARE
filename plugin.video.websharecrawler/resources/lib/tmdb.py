@@ -12,7 +12,7 @@ from resources.lib.metadata import YEAR_RE, normalize_title
 
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMAGE = "https://image.tmdb.org/t/p/"
-USER_AGENT = "AG Kino Kodi Addon/0.7.0"
+USER_AGENT = "Webshare Atlas Kodi Addon/0.8.27"
 
 
 def clean_query(title):
@@ -204,6 +204,30 @@ class TMDbClient(object):
             "backdrop": _image(details.get("backdrop_path"), "w1280"),
             "language": details.get("_overview_language") or details.get("_language") or self.languages()[0],
         }
+
+    def fetch_tv_by_title(self, title, year=None):
+        if not self.enabled():
+            return None
+
+        query = clean_query(title)
+        if not query:
+            return None
+        for language in self.languages():
+            params = {
+                "query": query,
+                "language": language,
+                "include_adult": "false",
+            }
+            if year:
+                params["first_air_date_year"] = int(year)
+            try:
+                data = self._get("/search/tv", params)
+            except Exception:
+                continue
+            results = data.get("results") or []
+            if results and results[0].get("id"):
+                return self.fetch_tv_by_id(results[0]["id"])
+        return None
 
     def languages(self):
         result = []

@@ -38,5 +38,7 @@ command -v npm >/dev/null 2>&1 || {
 }
 
 node --check main.js
-node main.js
+# The crawler now requires an explicit mode.  The old no-argument call exited
+# with code 2, so cron never refreshed the catalog or reached the DB import.
+node main.js --crawl
 npm run catalog:update-db

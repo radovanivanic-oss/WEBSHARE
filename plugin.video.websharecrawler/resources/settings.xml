@@ -16,6 +16,8 @@
 
   <category label="Katalóg">
     <setting id="use_static_catalog" type="bool" label="Používať verejný katalóg" default="true"/>
+    <setting id="live_series_refresh" type="bool" label="Dopĺňať seriály priamo z Webshare" default="true"/>
+    <setting id="live_series_cache_ttl_hours" type="number" label="Platnosť živého seriálového cache v hodinách" default="6"/>
     <setting id="stream_autoselect" type="bool" label="Automatický výber streamu" default="true"/>
     <setting id="cache_ttl_hours" type="number" label="Platnosť stream cache v hodinách" default="6"/>
     <setting id="prefer_language" type="labelenum" label="Primárny jazyk" values="Bez preferencie|CZ|SK|CZ/SK|EN|Multi" default="0"/>
@@ -29,6 +31,7 @@
     <setting id="use_catalog_api" type="bool" label="Používať interné katalógové API" default="false"/>
     <setting id="catalog_api_url" type="text" label="URL katalógového API" default=""/>
     <setting id="public_catalog_url" type="text" label="URL verejného katalógového ukazovateľa" default="https://raw.githubusercontent.com/radovanivanic-oss/AG_repo/main/catalog/v1/current.json"/>
+    <setting id="tmdb_api_key" type="text" label="Voliteľný TMDb API kľúč pre chýbajúce popisy" option="hidden" default=""/>
     <setting id="auto_index" type="bool" label="Automaticky indexovať legacy katalóg" default="false"/>
   </category>
 
@@ -64,7 +67,7 @@
   </category>
 
   <category label="Informácie">
-    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.8.26" enable="false"/>
+    <setting id="addon_version_info" type="text" label="Verzia addonu" default="0.8.27" enable="false"/>
     <setting id="catalog_status_info" type="text" label="Stav katalógu" default="Verejný statický katalóg" enable="false"/>
     <setting id="catalog_items_info" type="text" label="Počet indexovaných položiek" default="Pozri Nástroje / Katalóg" enable="false"/>
     <setting id="catalog_updated_info" type="text" label="Posledná aktualizácia" default="Pozri Nástroje / Katalóg" enable="false"/>

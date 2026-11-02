@@ -273,6 +273,42 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(masked, "fixt...alue")
         self.assertNotEqual(masked, "fixture-wst-value")
 
+    def test_search_parses_episode_fields_without_credentials(self):
+        response = xml(
+            "<status>OK</status><total>1</total>"
+            "<file><ident>episode-ident</ident>"
+            "<name>Gold.Rush.S17E02.1080p.HEVC.x265-MeGusta.mkv</name>"
+            "<type>mkv</type><size>1234</size><password>0</password>"
+            "<positive_votes>7</positive_votes><negative_votes>1</negative_votes></file>"
+        )
+        transport = QueueTransport(response)
+        with mock.patch.object(webshare, "urlopen", transport):
+            result = webshare.WebshareResolver("", "").search_series("Gold Rush")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["files"][0]["ident"], "episode-ident")
+        self.assertEqual(result["files"][0]["season_number"], 17)
+        self.assertEqual(result["files"][0]["episode_number"], 2)
+        self.assertEqual(result["files"][0]["series_title"], "Gold Rush")
+        payload = parse_qs(transport.requests[0].data.decode("utf-8"))
+        self.assertNotIn("wst", payload)
+        self.assertEqual(payload["category"], ["video"])
+
+    def test_search_all_reads_multiple_pages_and_deduplicates_idents(self):
+        first = xml(
+            "<status>OK</status><total>2</total>"
+            "<file><ident>one</ident><name>Show.S01E01.mkv</name><size>1</size></file>"
+        )
+        second = xml(
+            "<status>OK</status><total>2</total>"
+            "<file><ident>one</ident><name>Show.S01E01.mkv</name><size>1</size></file>"
+            "<file><ident>two</ident><name>Show.S01E02.mkv</name><size>2</size></file>"
+        )
+        transport = QueueTransport(first, second)
+        with mock.patch.object(webshare, "urlopen", transport):
+            result = webshare.WebshareResolver("", "").search_all("Show", max_files=2, page_size=1)
+        self.assertEqual([row["ident"] for row in result["files"]], ["one", "two"])
+        self.assertEqual(len(transport.requests), 2)
+
 
 class KodiPlaybackTests(unittest.TestCase):
     def setUp(self):
@@ -550,6 +586,24 @@ class KodiSearchTests(unittest.TestCase):
                 addon.api_search({})
         client.search.assert_not_called()
         self.store.add_search.assert_not_called()
+
+    def test_live_series_refresh_filters_spin_offs_and_caches_results(self):
+        self.store.metadata_get_many.return_value = {}
+        resolver = mock.Mock()
+        resolver.search_series.return_value = {
+            "total": 3,
+            "files": [
+                {"ident": "main", "series_title": "Gold Rush", "season_number": 17, "episode_number": 1},
+                {"ident": "variant", "series_title": "Gold Rush", "season_number": 17, "episode_number": 1},
+                {"ident": "spin-off", "series_title": "Gold Rush Mine Rescue", "season_number": 1, "episode_number": 1},
+            ],
+        }
+        with mock.patch.object(addon, "WebshareResolver", return_value=resolver), mock.patch.object(
+            addon, "bool_setting", side_effect=lambda key, default=False: default if key == "live_series_refresh" else default
+        ):
+            rows = addon.load_live_series_files("27122", {"title": "Gold Rush"})
+        self.assertEqual([row["ident"] for row in rows], ["main", "variant"])
+        self.store.metadata_set.assert_called_once()
 
     def test_api_response_shape_renders_multiple_items_and_missing_pagination(self):
         client = mock.Mock()
