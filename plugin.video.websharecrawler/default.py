@@ -153,6 +153,11 @@ def set_item_label2(item, label):
             pass
 
 
+def menu_art():
+    """Return the small flat geometric icon used by directory items."""
+    return os.path.join(ADDON.getAddonInfo("path"), "resources", "media", "menu-icon.svg")
+
+
 def format_runtime(minutes):
     minutes = safe_int(minutes, 0)
     if minutes <= 0:
@@ -447,6 +452,11 @@ def add_directory(label, action, query=None):
     query = query or {}
     query["action"] = action
     item = xbmcgui.ListItem(label=label)
+    try:
+        icon = menu_art()
+        item.setArt({"icon": icon, "thumb": icon, "poster": icon})
+    except Exception:
+        pass
     add_home_context(item, label, query)
     xbmcplugin.addDirectoryItem(HANDLE, addon_url(query), item, isFolder=True)
 
@@ -455,6 +465,11 @@ def add_command(label, action, query=None):
     query = query or {}
     query["action"] = action
     item = xbmcgui.ListItem(label=label)
+    try:
+        icon = menu_art()
+        item.setArt({"icon": icon, "thumb": icon, "poster": icon})
+    except Exception:
+        pass
     add_home_context(item, label, query)
     xbmcplugin.addDirectoryItem(HANDLE, addon_url(query), item, isFolder=False)
 
