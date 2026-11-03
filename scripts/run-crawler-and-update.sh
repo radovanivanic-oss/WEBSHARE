@@ -25,6 +25,7 @@ fi
 export CRAWLER_BEST_EFFORT_SEARCH=true
 export CRAWLER_BEST_EFFORT_PARTITIONING=true
 export CRAWLER_MAX_PAGES_PER_PREFIX=110
+export CRAWLER_MAX_DEPTH=2
 
 set -a
 # shellcheck disable=SC1091
@@ -34,6 +35,10 @@ if [[ ! -f .env ]]; then
 fi
 . ./.env
 set +a
+
+# Keep the production best-effort sweep bounded even if an older .env file
+# contains a different value. A run remains explicitly incomplete.
+export CRAWLER_MAX_DEPTH=2
 
 command -v node >/dev/null 2>&1 || {
   echo "Node.js nie je dostupný v PATH." >&2
