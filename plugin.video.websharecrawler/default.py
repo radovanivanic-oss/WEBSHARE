@@ -1542,6 +1542,11 @@ def add_live_episode(media_id, detail, season, episode, rows):
     item.setProperty("plot", plot)
     item.setProperty("description", plot)
     item.setProperty("LiveWebshareSources", str(len(rows)))
+    # This route opens a source selector and then resolves the selected file.
+    # It must be advertised to Kodi as a playable item, otherwise Kodi treats
+    # the click as navigation into a folder and shows an empty Videos view.
+    item.setContentLookup(False)
+    item.setProperty("IsPlayable", "true")
     xbmcplugin.addDirectoryItem(
         HANDLE,
         addon_url(
@@ -1553,7 +1558,7 @@ def add_live_episode(media_id, detail, season, episode, rows):
             }
         ),
         item,
-        isFolder=True,
+        isFolder=False,
     )
 
 

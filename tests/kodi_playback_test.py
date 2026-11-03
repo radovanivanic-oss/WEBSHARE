@@ -611,6 +611,27 @@ class KodiSearchTests(unittest.TestCase):
         self.assertEqual([row["ident"] for row in rows], ["main", "variant"])
         self.store.metadata_set.assert_called_once()
 
+    def test_live_episode_is_playable_and_uses_source_selector_route(self):
+        added, _ended, add_patch, end_patch = self.capture_directory()
+        detail = {
+            "title": "Gold Rush",
+            "display_title": "Gold Rush",
+            "overview": "Fixture episode description",
+            "year": 2026,
+        }
+        rows = [{"ident": "fixture-ident"}, {"ident": "fixture-variant"}]
+        with add_patch, end_patch:
+            addon.add_live_episode("27122", detail, 17, 1, rows)
+        self.assertEqual(len(added), 1)
+        self.assertEqual(
+            self.route_params(added[0]),
+            {"action": "live_media_select", "episode": "1", "media_id": "27122", "season": "17"},
+        )
+        self.assertFalse(added[0][1].get("isFolder"))
+        self.assertEqual(added[0][0][2].properties["IsPlayable"], "true")
+        self.assertFalse(added[0][0][2].content_lookup)
+        self.assertEqual(added[0][0][2].info[1]["plot"], "Fixture episode description")
+
     def test_api_response_shape_renders_multiple_items_and_missing_pagination(self):
         client = mock.Mock()
         client.search.return_value = {
