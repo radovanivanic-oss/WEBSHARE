@@ -131,6 +131,8 @@ class PublicCatalogTests(unittest.TestCase):
     def test_detail_hierarchy_and_variant_ident_are_static(self):
         client = self.client()
         self.assertEqual(client.detail(272158)["id"], 272158)
+        self.assertEqual(client.detail(2)["id"], 2)
+        self.assertEqual(client.detail(2)["tvshow_id"], 1000727)
         self.assertEqual(client.files(272158)["data"][0]["ident"], "fixture-ident")
         self.assertEqual(client.seasons(1000727)["data"], [{"season_number": 1, "episode_count": 1}])
         self.assertEqual(client.episodes(1000727)["data"][0]["id"], 2)

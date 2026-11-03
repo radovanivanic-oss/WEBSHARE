@@ -16,7 +16,7 @@ from resources.lib.catalog_api import CatalogApiError
 from resources.lib.paths import profile_path
 
 
-USER_AGENT = "Webshare Atlas Public Catalog/0.8.27"
+USER_AGENT = "Webshare Atlas Public Catalog/0.8.28"
 ROOT_SCHEMA = "webshare-atlas-public-catalog/v1"
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 PUBLIC_CATALOG_RELEASE_REPOSITORY = "radovanivanic-oss/AG_repo"
@@ -111,6 +111,7 @@ class PublicCatalogClient(object):
         self._records = {}
         self._search_indexes = {}
         self._objects = {}
+        self._episode_records = {}
         self._pending_activation = False
 
     def _path(self, name):
@@ -166,6 +167,7 @@ class PublicCatalogClient(object):
             self._records = {}
             self._search_indexes = {}
             self._objects = {}
+            self._episode_records = {}
         if pointer.get("manifest_sha256") and _sha256(json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) != pointer.get("manifest_sha256"):
             # GitHub raw files normally preserve the builder's trailing newline; accept the
             # canonical JSON hash only when a server-side pointer does not include a hash.
@@ -392,6 +394,23 @@ class PublicCatalogClient(object):
         for episode in (group or {}).get("episodes", []):
             if int(episode.get("id") or 0) == int(media_id):
                 return episode
+
+        # Episode objects are sharded by their parent tvshow_id, while Kodi
+        # opens an episode by the episode's own media id.  The episode id
+        # therefore cannot be used to select one shard directly.  Build a
+        # small lazy reverse lookup instead of reporting "Médiá sa nenašli"
+        # after a valid episode was listed.
+        if numeric_id in self._episode_records:
+            return self._episode_records[numeric_id]
+        for shard in self._ensure_manifest().get("episodes", {}).get("shards", []):
+            for episode_group in self._object(shard):
+                for episode in episode_group.get("episodes") or []:
+                    episode_id = int(episode.get("id") or 0)
+                    if episode_id:
+                        self._episode_records[episode_id] = episode
+                    if episode_id == numeric_id:
+                        return episode
+        self._episode_records[numeric_id] = None
         return None
 
     def detail(self, media_id):
