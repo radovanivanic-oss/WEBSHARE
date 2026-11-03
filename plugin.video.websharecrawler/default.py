@@ -1193,6 +1193,10 @@ def add_api_media(media):
     )
     direct_source_selection = media.get("media_type") in ("movie", "episode", "video")
     if direct_source_selection:
+        # Stream Cinema disables Kodi's content lookup for plugin routes that
+        # open a source selector. Without this Kodi 21 may send the item to
+        # Playlist Player as an unplayable URL before the route is resolved.
+        item.setContentLookup(False)
         item.setProperty("IsPlayable", "true")
     xbmcplugin.addDirectoryItem(
         HANDLE,
@@ -1249,6 +1253,7 @@ def api_file_list_item(file_row, detail, meta):
     }
     title = meta.get("title") or row["title"]
     item = xbmcgui.ListItem(label=api_file_label(file_row), label2=row["name"] or human_file_size(row["size"]))
+    item.setContentLookup(False)
     item.setProperty("IsPlayable", "true")
     set_video_metadata(item, row, meta, title)
     item.setProperty("VideoCodec", str(file_row.get("video_codec") or "").lower())
@@ -1257,6 +1262,52 @@ def api_file_list_item(file_row, detail, meta):
     item.setProperty("WebshareOriginalName", row["name"])
     item.setProperty("FileSize", human_file_size(row["size"]))
     return item, row
+
+
+def select_and_play_source(heading, items, rows):
+    """Select a source and skip stale Webshare files transparently.
+
+    The public catalog can contain a file that Webshare has removed since the
+    last crawl. Stream Cinema keeps the source-selection flow alive in that
+    case; Atlas must do the same instead of resolving ``False`` immediately
+    and leaving Kodi in an empty Videos container.
+    """
+    remaining_items = list(items or [])
+    remaining_rows = list(rows or [])
+    while remaining_rows:
+        if len(remaining_rows) == 1:
+            selected = 0
+        else:
+            try:
+                selected = xbmcgui.Dialog().select(heading, remaining_items, useDetails=True)
+            except TypeError:
+                selected = xbmcgui.Dialog().select(heading, remaining_items)
+        if selected is None or selected < 0 or selected >= len(remaining_rows):
+            finish_resolved(False)
+            return False
+
+        selected_row = remaining_rows[selected]
+        played = play_video(
+            {
+                "ident": selected_row.get("ident", ""),
+                "title": heading,
+                "_finish_on_error": False,
+            }
+        )
+        if not played:
+            failed_name = selected_row.get("name") or selected_row.get("ident") or "zdroj"
+            notify(
+                "Zdroj nie je dostupný: {}".format(failed_name),
+                getattr(xbmcgui, "NOTIFICATION_WARNING", xbmcgui.NOTIFICATION_INFO),
+            )
+            remaining_rows.pop(selected)
+            remaining_items.pop(selected)
+            continue
+        return True
+
+    notify("Všetky zdroje pre toto video sú nedostupné", xbmcgui.NOTIFICATION_ERROR)
+    finish_resolved(False)
+    return False
 
 
 def api_media_select(params):
@@ -1290,18 +1341,7 @@ def api_media_select(params):
         items.append(item)
         rows.append(row)
     heading = meta.get("title") or detail.get("display_title") or detail.get("title") or "Webshare Atlas"
-    if len(rows) == 1:
-        play_video({"ident": rows[0]["ident"], "title": heading})
-        return
-    try:
-        selected = xbmcgui.Dialog().select(heading, items, useDetails=True)
-    except TypeError:
-        selected = xbmcgui.Dialog().select(heading, items)
-    if selected is None or selected < 0 or selected >= len(rows):
-        finish_resolved(False)
-        return
-    selected_row = rows[selected]
-    play_video({"ident": selected_row["ident"], "title": heading})
+    select_and_play_source(heading, items, rows)
 
 
 def api_media_detail(params):
@@ -1551,17 +1591,7 @@ def live_media_select(params):
         items.append(item)
         rows.append(row)
     heading = "{} S{:02d}E{:02d}".format(episode_detail["title"], season, episode)
-    if len(rows) == 1:
-        play_video({"ident": rows[0]["ident"], "title": heading})
-        return
-    try:
-        selected = xbmcgui.Dialog().select(heading, items, useDetails=True)
-    except TypeError:
-        selected = xbmcgui.Dialog().select(heading, items)
-    if selected is None or selected < 0 or selected >= len(rows):
-        finish_resolved(False)
-        return
-    play_video({"ident": rows[selected]["ident"], "title": heading})
+    select_and_play_source(heading, items, rows)
 
 
 def enrich_api_meta_from_tmdb_id(detail, meta):
@@ -1842,6 +1872,7 @@ def movie_detail(params):
     if rows:
         best = rows[0]
         item = xbmcgui.ListItem(label="[B]Prehrať najlepší stream[/B]")
+        item.setContentLookup(False)
         item.setProperty("IsPlayable", "true")
         best_meta = group_meta or metadata.get(best["ident"]) or {}
         set_video_metadata(item, best, best_meta, best_meta.get("title") or title)
@@ -2113,6 +2144,7 @@ def add_playable(row, meta=None):
     display_title = meta.get("title") or title
     label = decorate_label(row)
     item = xbmcgui.ListItem(label=label)
+    item.setContentLookup(False)
     item.setProperty("IsPlayable", "true")
     set_video_metadata(item, row, meta, display_title)
     item.setProperty("VideoCodec", codec_from_name(row["name"]))
@@ -2362,7 +2394,7 @@ def play_video(params):
     ident = params.get("ident", "")
     row = store().get_item(ident)
     title = row["title"] if row else params.get("title", ident)
-
+    finish_on_error = params.get("_finish_on_error", True)
     resolver = WebshareResolver(
         username=setting("username"),
         password=setting("password"),
@@ -2373,13 +2405,16 @@ def play_video(params):
         stream_url = resolver.resolve(ident)
     except ResolverError as exc:
         notify("Resolver zlyhal: {}".format(exc), xbmcgui.NOTIFICATION_ERROR)
-        finish_resolved(False)
-        return
+        if finish_on_error:
+            finish_resolved(False)
+        return False
 
     store().record_play_start(ident)
     play_item = xbmcgui.ListItem(path=stream_url, label=title)
+    play_item.setContentLookup(False)
     play_item.setProperty("IsPlayable", "true")
     finish_resolved(True, play_item)
+    return True
 
 
 def continue_menu(params):

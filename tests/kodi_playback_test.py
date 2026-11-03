@@ -59,6 +59,9 @@ def install_kodi_stubs():
         def setProperty(self, key, value):
             self.properties[key] = value
 
+        def setContentLookup(self, value):
+            self.content_lookup = value
+
         def addContextMenuItems(self, items):
             self.context = items
 
