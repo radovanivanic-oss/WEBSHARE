@@ -1343,6 +1343,7 @@ def add_api_media(media):
     )
     item.setProperty("plot", plot)
     item.setProperty("description", plot)
+    add_tmdb_link(item, media.get("external_url") or tmdb_url_for_media(media))
     direct_source_selection = media.get("media_type") in ("movie", "episode", "video")
     if direct_source_selection:
         # Stream Cinema disables Kodi's content lookup for plugin routes that
@@ -1526,7 +1527,6 @@ def api_media_detail(params):
             except CatalogApiError:
                 live_metadata = {}
             meta = api_detail_meta(detail, live_metadata)
-            set_plugin_category("Seriály / Webshare Atlas / {}".format(meta.get("title") or detail.get("title") or "Seriál"))
             api_media_seasons(media_id, detail, meta)
             return
         set_plugin_category("Webshare Atlas / {}".format(
@@ -1563,6 +1563,9 @@ def api_media_detail(params):
 def api_detail_meta(detail, live_metadata):
     detail = detail if isinstance(detail, dict) else {}
     live_metadata = live_metadata if isinstance(live_metadata, dict) else {}
+    live_external_id = safe_text(live_metadata.get("externalId"))
+    detail_external_id = safe_text(detail.get("external_id"))
+    tmdb_id = detail_external_id if detail.get("external_source") == "tmdb" else live_external_id
     meta = {
         "title": detail.get("display_title") or detail.get("title") or "",
         "original_title": detail.get("original_title") or "",
@@ -1577,13 +1580,141 @@ def api_detail_meta(detail, live_metadata):
         "poster": live_metadata.get("posterUrl") or detail.get("poster_url") or "",
         "backdrop": live_metadata.get("backdropUrl") or detail.get("backdrop_url") or "",
         "season_numbers": [],
+        "tmdb_id": tmdb_id if tmdb_id.isdigit() else "",
+        "external_url": detail.get("external_url") or live_metadata.get("externalUrl") or "",
     }
     meta = enrich_api_meta_from_tmdb_id(detail, meta)
     return enrich_api_meta_from_tmdb_title(detail, meta)
 
 
+def addon_tmdb_client():
+    return TMDbClient(
+        api_key=setting("tmdb_api_key"),
+        language=metadata_language(),
+        fallback_language=metadata_fallback_language(),
+        second_fallback_language=metadata_second_fallback_language(),
+    )
+
+
+def live_catalog_metadata(media_id):
+    """Ask the optional crawler API for current metadata without using the
+    public catalog's stored overview.
+
+    The static catalog remains usable when the server is unreachable.  When
+    ``catalog_api_url`` is configured, descriptions are fetched at view time
+    from the live provider instead of being copied into the catalog export.
+    """
+    api_url = setting("catalog_api_url", "").strip()
+    if not api_url or not media_id:
+        return {}
+    try:
+        return CatalogApiClient(api_url).metadata(media_id) or {}
+    except (CatalogApiError, TypeError, ValueError):
+        return {}
+
+
+def tmdb_url_for_media(media, season=None, episode=None):
+    media = media if isinstance(media, dict) else {}
+    external_id = safe_text(media.get("tmdb_id") or media.get("external_id"))
+    if season is None and episode is None:
+        external_url = safe_text(media.get("external_url"))
+        if external_url:
+            return external_url
+    if not external_id.isdigit():
+        return ""
+    media_type = media.get("media_type")
+    if media_type == "episode" or (season is not None and episode is not None):
+        show_id = external_id.split(":", 1)[0]
+        return "https://www.themoviedb.org/tv/{}/season/{}/episode/{}".format(
+            show_id, safe_int(season if season is not None else media.get("season_number")),
+            safe_int(episode if episode is not None else media.get("episode_number")),
+        )
+    if season is not None:
+        return "https://www.themoviedb.org/tv/{}/season/{}".format(external_id, safe_int(season))
+    if media_type == "movie":
+        return "https://www.themoviedb.org/movie/{}".format(external_id)
+    return "https://www.themoviedb.org/tv/{}".format(external_id)
+
+
+def add_tmdb_link(item, url):
+    url = safe_text(url)
+    if not url:
+        return
+    item.setProperty("ExternalUrl", url)
+    item.setProperty("TMDbUrl", url)
+    add_context = getattr(item, "addContextMenuItems", None)
+    if add_context:
+        try:
+            add_context([("TMDb – zobraziť odkaz na živý popis", "RunPlugin({})".format(
+                addon_url({"action": "show_tmdb_link", "url": url})
+            ))])
+        except Exception:
+            pass
+
+
+def show_tmdb_link(params):
+    url = safe_text(params.get("url"))
+    if url:
+        xbmcgui.Dialog().textviewer("TMDb – živý popis", url)
+
+
+def enrich_episode_from_tmdb(episode, tmdb_episode, series_meta=None):
+    enriched = dict(episode or {})
+    tmdb_episode = tmdb_episode if isinstance(tmdb_episode, dict) else {}
+    series_meta = series_meta if isinstance(series_meta, dict) else {}
+    # Live TMDb values win over any stale catalog value.  If TMDb has no
+    # localized text, the in-memory series fallback is retained.
+    if safe_text(tmdb_episode.get("overview")):
+        enriched["overview"] = tmdb_episode.get("overview")
+    if safe_text(tmdb_episode.get("still")):
+        enriched["poster_url"] = tmdb_episode.get("still")
+    if safe_text(tmdb_episode.get("external_url")):
+        enriched["external_url"] = tmdb_episode.get("external_url")
+    if tmdb_episode.get("runtime"):
+        enriched["runtime_minutes"] = tmdb_episode.get("runtime")
+    if safe_text(tmdb_episode.get("air_date")):
+        enriched["release_date"] = tmdb_episode.get("air_date")
+        enriched["year"] = safe_int(str(tmdb_episode.get("air_date"))[:4])
+    if not safe_text(enriched.get("backdrop_url")):
+        enriched["backdrop_url"] = series_meta.get("backdrop") or ""
+    return enriched
+
+
+def enrich_episode_from_live_metadata(episode, live_metadata):
+    enriched = dict(episode or {})
+    live_metadata = live_metadata if isinstance(live_metadata, dict) else {}
+    for target, source in (
+        ("overview", "overview"),
+        ("poster_url", "posterUrl"),
+        ("backdrop_url", "backdropUrl"),
+        ("runtime_minutes", "runtimeMinutes"),
+        ("rating", "rating"),
+        ("external_url", "externalUrl"),
+    ):
+        if live_metadata.get(source):
+            enriched[target] = live_metadata.get(source)
+    return enriched
+
+
+def live_tmdb_season(series_meta, season):
+    series_meta = series_meta if isinstance(series_meta, dict) else {}
+    tv_id = safe_text(series_meta.get("tmdb_id"))
+    if not tv_id.isdigit():
+        return None
+    client = addon_tmdb_client()
+    if not client.enabled():
+        return None
+    try:
+        return client.fetch_tv_season(tv_id, safe_int(season))
+    except Exception:
+        return None
+
+
 def api_media_seasons(media_id, detail, meta=None):
     meta = meta or api_detail_meta(detail, {})
+    live_series_metadata = live_catalog_metadata(media_id)
+    if live_series_metadata:
+        meta = api_detail_meta(detail, live_series_metadata)
     try:
         response = catalog_api().seasons(media_id) or {}
         seasons = response.get("data") or []
@@ -1655,6 +1786,7 @@ def api_media_seasons(media_id, detail, meta=None):
         )
         item.setProperty("plot", plot)
         item.setProperty("description", plot)
+        add_tmdb_link(item, tmdb_url_for_media(meta, season=season_number))
         xbmcplugin.addDirectoryItem(
             HANDLE,
             addon_url({"action": "api_media_season", "media_id": media_id, "season": season_number}),
@@ -1673,7 +1805,7 @@ def api_media_season(params):
     series_meta = {}
     try:
         detail = catalog_api().detail(media_id) or {}
-        live_metadata = catalog_api().metadata(media_id) or {}
+        live_metadata = live_catalog_metadata(media_id) or catalog_api().metadata(media_id) or {}
         series_meta = api_detail_meta(detail, live_metadata)
     except CatalogApiError:
         detail = {}
@@ -1691,18 +1823,30 @@ def api_media_season(params):
     except CatalogApiError:
         live_files = []
     live_groups = live_episode_groups(live_files)
+    live_tmdb_season_data = live_tmdb_season(series_meta, season)
+    live_tmdb_episodes = {
+        safe_int(row.get("episode_number")): row
+        for row in (live_tmdb_season_data or {}).get("episodes", [])
+        if isinstance(row, dict)
+    }
     catalog_keys = set()
     for episode in static_episodes:
         key = (safe_int(episode.get("season_number")), safe_int(episode.get("episode_number")))
         catalog_keys.add(key)
-        add_api_media(enrich_episode_media(episode, detail, series_meta))
+        enriched = enrich_episode_media(episode, detail, series_meta)
+        enriched = enrich_episode_from_live_metadata(enriched, live_catalog_metadata(episode.get("id")))
+        enriched = enrich_episode_from_tmdb(enriched, live_tmdb_episodes.get(key[1]), series_meta)
+        add_api_media(enriched)
     # Live Webshare search is only a fallback for episodes absent from the
     # central catalog. It must never replace catalog pagination or hide older
     # episodes when the provider returned only a partial search window.
     for (season_number, episode_number), rows in sorted(live_groups.items()):
         if str(season_number) != str(season) or (season_number, episode_number) in catalog_keys:
             continue
-        add_live_episode(media_id, detail, season_number, episode_number, rows, series_meta)
+        add_live_episode(
+            media_id, detail, season_number, episode_number, rows, series_meta,
+            live_tmdb_episodes.get(episode_number),
+        )
     pagination = response.get("pagination") or {}
     add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_season", params, page)
     set_plugin_category("Seriály / Webshare Atlas / {} / Séria {:02d}".format(
@@ -1730,7 +1874,7 @@ def live_episode_files_for_detail(detail):
     return live_episode_groups(load_live_series_files(parent_id, parent_detail)).get((season, episode), [])
 
 
-def add_live_episode(media_id, detail, season, episode, rows, series_meta=None):
+def add_live_episode(media_id, detail, season, episode, rows, series_meta=None, tmdb_episode=None):
     title = detail.get("display_title") or detail.get("title") or "Seriál"
     episode_title = "{} S{:02d}E{:02d}".format(title, season, episode)
     live_languages = []
@@ -1749,7 +1893,12 @@ def add_live_episode(media_id, detail, season, episode, rows, series_meta=None):
         }),
     )
     meta = series_meta or api_detail_meta(detail, {})
-    plot = meta.get("overview") or detail.get("overview") or "Popis epizódy nie je dostupný."
+    episode_media = enrich_episode_from_tmdb(
+        {"backdrop_url": meta.get("backdrop") or detail.get("backdrop_url") or ""},
+        tmdb_episode,
+        meta,
+    )
+    plot = episode_media.get("overview") or meta.get("overview") or detail.get("overview") or "Popis epizódy nie je dostupný."
     item.setInfo(
         "video",
         {
@@ -1757,7 +1906,7 @@ def add_live_episode(media_id, detail, season, episode, rows, series_meta=None):
             "tvshowtitle": title,
             "plot": plot,
             "plotoutline": plot,
-            "year": safe_int(detail.get("year")),
+            "year": safe_int(episode_media.get("year") or detail.get("year")),
             "genre": ", ".join(safe_text_list(meta.get("genres"))),
             "rating": safe_float(meta.get("rating")),
             "season": season,
@@ -1767,13 +1916,19 @@ def add_live_episode(media_id, detail, season, episode, rows, series_meta=None):
     )
     item.setArt(
         {
-            "poster": meta.get("poster") or detail.get("poster_url") or fallback_art(),
-            "thumb": meta.get("poster") or detail.get("poster_url") or fallback_art(),
-            "fanart": meta.get("backdrop") or detail.get("backdrop_url") or fallback_art(),
+            "poster": episode_media.get("poster_url") or meta.get("poster") or detail.get("poster_url") or fallback_art(),
+            "thumb": episode_media.get("poster_url") or meta.get("poster") or detail.get("poster_url") or fallback_art(),
+            "fanart": episode_media.get("backdrop_url") or meta.get("backdrop") or detail.get("backdrop_url") or fallback_art(),
         }
     )
     item.setProperty("plot", plot)
     item.setProperty("description", plot)
+    add_tmdb_link(item, episode_media.get("external_url") or tmdb_url_for_media({
+        "media_type": "episode",
+        "external_id": meta.get("tmdb_id"),
+        "season_number": season,
+        "episode_number": episode,
+    }))
     item.setProperty("LiveWebshareSources", str(len(rows)))
     # This route opens a source selector and then resolves the selected file.
     # It must be advertised to Kodi as a playable item, otherwise Kodi treats
@@ -1840,20 +1995,13 @@ def live_media_select(params):
 
 
 def enrich_api_meta_from_tmdb_id(detail, meta):
-    if safe_text(meta.get("overview")):
-        return meta
     if detail.get("external_source") != "tmdb" or detail.get("media_type") not in ("movie", "tv"):
         return meta
     external_id = safe_text(detail.get("external_id"))
     if not external_id.isdigit():
         return meta
 
-    client = TMDbClient(
-        api_key=setting("tmdb_api_key"),
-        language=metadata_language(),
-        fallback_language=metadata_fallback_language(),
-        second_fallback_language=metadata_second_fallback_language(),
-    )
+    client = addon_tmdb_client()
     if not client.enabled():
         return meta
 
@@ -1879,6 +2027,8 @@ def enrich_api_meta_from_tmdb_id(detail, meta):
         ("poster", "poster"),
         ("backdrop", "backdrop"),
         ("season_numbers", "season_numbers"),
+        ("tmdb_id", "tmdb_id"),
+        ("external_url", "external_url"),
     ):
         if not merged.get(target) and data.get(source):
             merged[target] = data[source]
@@ -1887,38 +2037,24 @@ def enrich_api_meta_from_tmdb_id(detail, meta):
 
 def enrich_api_meta_from_tmdb_title(detail, meta):
     """Fill static catalog gaps when a series has no preassigned TMDb ID."""
-    if safe_text(meta.get("overview")) or detail.get("media_type") != "tv":
+    if detail.get("media_type") != "tv" or safe_text(meta.get("tmdb_id")):
         return meta
     title = safe_text(detail.get("display_title") or detail.get("title"))
     api_key = setting("tmdb_api_key")
     if not title or not api_key:
         return meta
 
-    client = TMDbClient(
-        api_key=api_key,
-        language=metadata_language(),
-        fallback_language=metadata_fallback_language(),
-        second_fallback_language=metadata_second_fallback_language(),
-    )
+    client = addon_tmdb_client()
     if not client.enabled():
         return meta
 
-    cache_key = "tmdb-tv-title:{}:{}".format(metadata_language(), normalized_live_title(title))
+    # This is deliberately a live lookup.  The crawler stores only the
+    # provider identity/link; the current description is never persisted in
+    # the crawler or Kodi metadata database.
     try:
-        cached = store().metadata_get_many([cache_key], metadata_ttl_seconds())
+        data = client.fetch_tv_by_title(title, detail.get("year")) or {}
     except Exception:
-        cached = {}
-    if isinstance(cached, dict) and cache_key in cached:
-        data = cached.get(cache_key) or {}
-    else:
-        try:
-            data = client.fetch_tv_by_title(title, detail.get("year")) or {}
-        except Exception:
-            data = {}
-        try:
-            store().metadata_set(cache_key, data)
-        except Exception:
-            pass
+        data = {}
 
     merged = dict(meta)
     for target, source in (
@@ -1935,6 +2071,8 @@ def enrich_api_meta_from_tmdb_title(detail, meta):
         ("poster", "poster"),
         ("backdrop", "backdrop"),
         ("season_numbers", "season_numbers"),
+        ("tmdb_id", "tmdb_id"),
+        ("external_url", "external_url"),
     ):
         if not merged.get(target) and data.get(source):
             merged[target] = data[source]
@@ -2920,6 +3058,7 @@ def router():
         "api_media_select": lambda: api_media_select(params),
         "api_media_season": lambda: api_media_season(params),
         "live_media_select": lambda: live_media_select(params),
+        "show_tmdb_link": lambda: show_tmdb_link(params),
         "show_file_name": lambda: show_file_name(params),
         "search_ident": search_ident,
         "recent_searches": recent_searches,

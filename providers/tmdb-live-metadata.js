@@ -396,12 +396,20 @@ class TmdbLiveMetadata {
         signal,
       });
       const results = Array.isArray(response.data?.results) ? response.data.results : [];
-      const exact = results.find((candidate) => {
+      const exact = results.filter((candidate) => {
         const names = [candidate?.name, candidate?.original_name].map(normalizeTitle);
         const candidateYear = Number.parseInt(String(candidate?.first_air_date || "").slice(0, 4), 10);
         return names.includes(normalizedQuery)
           && (!media.year || !candidateYear || Math.abs(candidateYear - Number(media.year)) <= 1);
-      });
+      }).sort((left, right) => {
+        const leftYear = Number.parseInt(String(left?.first_air_date || "").slice(0, 4), 10);
+        const rightYear = Number.parseInt(String(right?.first_air_date || "").slice(0, 4), 10);
+        return (
+          (media.year && leftYear === Number(media.year) ? 1 : 0) - (media.year && rightYear === Number(media.year) ? 1 : 0)
+          || (leftYear ? 1 : 0) - (rightYear ? 1 : 0)
+          || Number(right?.popularity || 0) - Number(left?.popularity || 0)
+        );
+      })[0];
       if (exact?.id) {
         return {
           ...media,

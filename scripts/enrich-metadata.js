@@ -149,7 +149,7 @@ function applyTvMatch(database, job, metadata, confidence, config) {
   `).run(
     showKey, metadata.externalId, `https://www.themoviedb.org/tv/${metadata.externalId}`,
     showClassification.category, metadata.title, metadata.originalTitle,
-    metadata.year, metadata.releaseDate, metadata.overview, JSON.stringify(metadata.genres), metadata.runtime,
+    metadata.year, metadata.releaseDate, null, JSON.stringify(metadata.genres), metadata.runtime,
     metadata.rating, metadata.voteCount, JSON.stringify(metadata.countries), JSON.stringify(metadata.languages),
     metadata.director, JSON.stringify(metadata.cast), metadata.posterUrl, metadata.backdropUrl, metadata.adult,
     config.tmdbLanguage, confidence, now, showClassification.classifierVersion, now, now
@@ -161,7 +161,7 @@ function applyTvMatch(database, job, metadata, confidence, config) {
         poster_url = ?, backdrop_url = ?, rating = ?, vote_count = ?, metadata_status = 'matched',
         metadata_confidence = ?, metadata_updated_at = ?, updated_at = ? WHERE id = ?
     `).run(metadata.externalId, `https://www.themoviedb.org/tv/${metadata.externalId}`,
-      metadata.title, metadata.originalTitle, showClassification.category, metadata.year, metadata.releaseDate, metadata.overview,
+      metadata.title, metadata.originalTitle, showClassification.category, metadata.year, metadata.releaseDate, null,
       JSON.stringify(metadata.genres), metadata.posterUrl, metadata.backdropUrl, metadata.rating,
       metadata.voteCount, confidence, now, now, showId);
   }

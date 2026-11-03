@@ -25,3 +25,17 @@ test("same-title type-correct remakes remain ambiguous", () => {
   );
   assert.equal(result.status, "ambiguous");
 });
+
+test("exact dated show wins over an undated same-title placeholder", () => {
+  const result = selectBestMatch(
+    { title: "Gold Rush", parsedYear: null },
+    [
+      { id: 34634, name: "Zlatá horúčka", original_name: "Gold Rush", first_air_date: "2010-12-03", popularity: 44 },
+      { id: 10220, name: "Gold Rush", original_name: "Gold Rush", first_air_date: "", popularity: 0.3 },
+    ],
+    "tv",
+    { auto: 0.9, ambiguous: 0.72 }
+  );
+  assert.equal(result.status, "matched");
+  assert.equal(result.best.result.id, 34634);
+});
