@@ -21,7 +21,10 @@ function cacheKey(media, languages) {
 }
 
 function titleCacheId(media) {
-  return `${media.media_type}:${media.id || ""}:${String(media.title || "").trim().toLowerCase()}`;
+  // Bump this whenever the title-to-TMDb matching policy changes.  It keeps
+  // stale results produced by an older, first-result-wins matcher from being
+  // served forever (for example Gold Rush resolving to an unrelated show).
+  return `title-match-v2:${media.media_type}:${media.id || ""}:${String(media.title || "").trim().toLowerCase()}`;
 }
 
 function normalizeTitle(value) {
