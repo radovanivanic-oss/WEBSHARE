@@ -610,7 +610,7 @@ def api_search_menu():
 
 
 def api_movies_menu():
-    set_plugin_category("Webshare Atlas / Filmy")
+    set_plugin_category("Filmy / Webshare Atlas")
     add_directory("Novinky", "api_media", {"category": "movies", "sort": "release_date_desc"})
     add_directory("Najnovšie pridané", "api_media", {"category": "movies", "sort": "recent", "order": "desc"})
     add_directory("Všetky filmy", "api_media", {"category": "movies", "sort": "title", "order": "asc"})
@@ -625,7 +625,7 @@ def api_movies_menu():
 
 
 def api_series_menu():
-    set_plugin_category("Webshare Atlas / Seriály")
+    set_plugin_category("Seriály / Webshare Atlas")
     add_directory("Novinky", "api_media", {"category": "series", "sort": "series_release_date_desc", "order": "desc"})
     add_directory("Najnovšie pridané", "api_media", {"category": "series", "sort": "recent", "order": "desc"})
     add_directory("Najnovšie epizódy", "api_media", {"category": "series", "type": "episode", "sort": "episode_recent", "order": "desc"})
@@ -1177,7 +1177,8 @@ def api_media(params):
             "music-videos": "Hudobné videá",
             "other": "Ostatné",
         }.get(params.get("category"), "Katalóg")
-    set_plugin_category("Webshare Atlas / {}".format(category_label))
+    prefix = "Seriály" if category_label == "Seriály" else "Filmy" if category_label == "Filmy" else category_label
+    set_plugin_category("{} / Webshare Atlas".format(prefix))
     page = int(params.get("page", "0"))
     category = params.get("category")
     request_params = {
