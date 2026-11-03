@@ -447,16 +447,6 @@ def add_directory(label, action, query=None):
     query = query or {}
     query["action"] = action
     item = xbmcgui.ListItem(label=label)
-    # Kodi skins use these fields for folder tiles and the right-hand
-    # information panel.  The old menu only supplied a bare label, which is
-    # why it looked empty compared with Stream Cinema even when the route was
-    # correct.
-    try:
-        menu_art = fallback_art()
-        item.setArt({"icon": menu_art, "thumb": menu_art, "poster": menu_art, "fanart": menu_art})
-        item.setInfo("video", {"title": safe_text(label), "mediatype": "video"})
-    except Exception:
-        pass
     add_home_context(item, label, query)
     xbmcplugin.addDirectoryItem(HANDLE, addon_url(query), item, isFolder=True)
 
@@ -465,12 +455,6 @@ def add_command(label, action, query=None):
     query = query or {}
     query["action"] = action
     item = xbmcgui.ListItem(label=label)
-    try:
-        menu_art = fallback_art()
-        item.setArt({"icon": menu_art, "thumb": menu_art, "poster": menu_art, "fanart": menu_art})
-        item.setInfo("video", {"title": safe_text(label), "mediatype": "video"})
-    except Exception:
-        pass
     add_home_context(item, label, query)
     xbmcplugin.addDirectoryItem(HANDLE, addon_url(query), item, isFolder=False)
 
