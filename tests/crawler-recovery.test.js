@@ -513,6 +513,24 @@ test("best-effort capped search continues pages and stops at an empty page", () 
   assert.equal(emptyPage.reason, "empty_page_after_unverified_search");
 });
 
+test("best-effort partitioning expands capped prefixes without claiming completeness", () => {
+  const algorithm = buildAlgorithmConfig({
+    roots: ["a"],
+    pageSize: 2,
+    serverResultCap: 2,
+    maxDepth: 2,
+    bestEffortSearchContinuation: true,
+    bestEffortPartitioning: true,
+  });
+  const decision = validateSearchPage(
+    { total: 2, files: [{ ident: "one" }, { ident: "two" }] },
+    { pages_processed: 0, items_observed: 0, last_page_fingerprint: null, depth: 1 },
+    algorithm
+  );
+  assert.equal(decision.action, "split");
+  assert.equal(decision.reason, "server_result_cap");
+});
+
 test("missing, impossible and premature totals cannot complete a prefix", () => {
   const algorithm = buildAlgorithmConfig({
     roots: ["a"],

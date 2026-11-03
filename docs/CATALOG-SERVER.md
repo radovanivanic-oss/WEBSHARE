@@ -86,7 +86,11 @@ riadkov sa musí zhodovať s `manifest.items`. Files a odvodené `media.is_activ
 sa potom zmenia v správnom poradí v jednej transakcii.
 
 Aktuálny crawler používa search/prefix stratégiu, ktorej úplnosť Webshare API
-nevie potvrdiť. Aj bez failed prefixov preto vytvára:
+nevie potvrdiť. Produkčný wrapper preto používa dve bezpečné best-effort
+rozšírenia: pokračuje za hlásený limit výsledkov a pri saturovanom prefixe
+skúsi hlbšie znakové prefixy. Tým sa nájde viac kandidátov a zníži sa počet
+chýbajúcich súborov, ale prekrývanie/fuzzy význam `what` stále neumožňuje
+vyhlásiť úplný katalóg. Aj bez failed prefixov preto vytvára:
 
 ```json
 {

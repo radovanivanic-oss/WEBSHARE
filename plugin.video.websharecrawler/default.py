@@ -517,6 +517,7 @@ def api_movies_menu():
 def api_series_menu():
     add_directory("Novinky", "api_media", {"category": "series", "sort": "series_release_date_desc", "order": "desc"})
     add_directory("Najnovšie pridané", "api_media", {"category": "series", "sort": "recent", "order": "desc"})
+    add_directory("Najnovšie epizódy", "api_media", {"category": "series", "type": "episode", "sort": "episode_recent", "order": "desc"})
     add_directory("Všetky seriály", "api_media", {"category": "series", "sort": "title", "order": "asc"})
     add_directory("Najlepšie hodnotené", "api_media", {"category": "series", "sort": "rating", "order": "desc"})
     add_directory("Roky", "api_years", {"category": "series"})
@@ -1053,6 +1054,7 @@ def api_media(params):
     category = params.get("category")
     request_params = {
         "category": category,
+        "type": params.get("type"),
         "page": page + 1,
         "limit": api_page_size(category),
         "light": "1" if category not in (None, "", "movies") else "",
@@ -1098,7 +1100,8 @@ def api_media(params):
     has_more = bool(pagination.get("has_more")) if "has_more" in pagination else page + 1 < int(pagination.get("pages") or 0)
     add_next_page(has_more, "api_media", params, page)
     category = params.get("category")
-    content = "tvshows" if category == "series" else "movies" if category == "movies" else "videos"
+    listed_types = {media.get("media_type") for media in data if isinstance(media, dict)}
+    content = "episodes" if params.get("type") == "episode" or "episode" in listed_types else "tvshows" if category == "series" else "movies" if category == "movies" else "videos"
     xbmcplugin.setContent(HANDLE, content)
     xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
 
@@ -1112,7 +1115,25 @@ def api_page_size(category):
 def hydrate_api_listing_metadata(items):
     static_mode = catalog_mode() == "static"
     hydrated = []
+    series_cache = {}
     for media in items or []:
+        if media.get("media_type") == "episode":
+            enriched = dict(media)
+            parent_id = media.get("tvshow_id")
+            parent_detail = {}
+            parent_meta = {}
+            if parent_id:
+                try:
+                    if parent_id not in series_cache:
+                        parent_detail = catalog_api().detail(parent_id) or {}
+                        parent_live_metadata = catalog_api().metadata(parent_id) or {}
+                        series_cache[parent_id] = (parent_detail, api_detail_meta(parent_detail, parent_live_metadata))
+                    parent_detail, parent_meta = series_cache[parent_id]
+                except CatalogApiError:
+                    parent_detail, parent_meta = {}, {}
+            enriched = enrich_episode_media(enriched, parent_detail, parent_meta)
+            hydrated.append(enriched)
+            continue
         if not static_mode and media.get("media_type") != "tv":
             hydrated.append(media)
             continue
@@ -1154,12 +1175,13 @@ def add_api_media(media):
     title = media_display_label(media)
     info_title = safe_text(media.get("title") if media.get("media_type") == "episode" else media.get("display_title") or media.get("title")) or "Bez názvu"
     year = media.get("year")
+    plot = media_plot(media)
     item = xbmcgui.ListItem(label=title)
     info = {
         "title": info_title,
         "originaltitle": media.get("original_title") or media.get("title") or "",
-        "plot": media.get("overview") or "",
-        "plotoutline": media.get("overview") or "",
+        "plot": plot,
+        "plotoutline": plot,
         "year": int(year or 0),
         "genre": ", ".join(
             [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in media.get("genres") or []]
@@ -1191,6 +1213,8 @@ def add_api_media(media):
             "fanart": media.get("backdrop_url") or fallback_art(),
         }
     )
+    item.setProperty("plot", plot)
+    item.setProperty("description", plot)
     direct_source_selection = media.get("media_type") in ("movie", "episode", "video")
     if direct_source_selection:
         # Stream Cinema disables Kodi's content lookup for plugin routes that
@@ -1324,15 +1348,31 @@ def api_media_select(params):
         except CatalogApiError:
             live_metadata = {}
         meta = api_detail_meta(detail, live_metadata)
+        if detail.get("media_type") == "episode" and detail.get("tvshow_id"):
+            try:
+                parent_detail = catalog_api().detail(detail.get("tvshow_id")) or {}
+                parent_metadata = catalog_api().metadata(detail.get("tvshow_id")) or {}
+                parent_meta = api_detail_meta(parent_detail, parent_metadata)
+                detail = enrich_episode_media(detail, parent_detail, parent_meta)
+                meta = api_detail_meta(detail, {})
+            except CatalogApiError:
+                pass
     except CatalogApiError as exc:
         notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
         finish_resolved(False)
         return
 
     if not files:
-        notify("Pre toto médium nie sú dostupné žiadne zdroje", xbmcgui.NOTIFICATION_ERROR)
-        finish_resolved(False)
-        return
+        if detail.get("media_type") == "episode":
+            fallback_files = live_episode_files_for_detail(detail)
+            if fallback_files:
+                files = sorted(fallback_files, key=variant_sort_key)
+        if files:
+            pass
+        else:
+            notify("Pre toto médium nie sú dostupné žiadne zdroje", xbmcgui.NOTIFICATION_ERROR)
+            finish_resolved(False)
+            return
 
     items = []
     rows = []
@@ -1478,6 +1518,15 @@ def api_media_season(params):
     media_id = params.get("media_id")
     season = params.get("season")
     page = int(params.get("page", "0"))
+    detail = {}
+    series_meta = {}
+    try:
+        detail = catalog_api().detail(media_id) or {}
+        live_metadata = catalog_api().metadata(media_id) or {}
+        series_meta = api_detail_meta(detail, live_metadata)
+    except CatalogApiError:
+        detail = {}
+        series_meta = {}
     try:
         response = catalog_api().episodes(media_id, page=page + 1, limit=page_size(), season=season)
     except CatalogApiError as exc:
@@ -1486,37 +1535,53 @@ def api_media_season(params):
         return
     static_episodes = response.get("data", []) or []
     live_files = []
-    detail = {}
     try:
-        detail = catalog_api().detail(media_id) or {}
         live_files = load_live_series_files(media_id, detail)
     except CatalogApiError:
-        detail = {}
+        live_files = []
     live_groups = live_episode_groups(live_files)
-    live_keys = set()
-    for (season_number, episode_number), rows in sorted(live_groups.items()):
-        if str(season_number) != str(season):
-            continue
-        live_keys.add((season_number, episode_number))
-        add_live_episode(media_id, detail, season_number, episode_number, rows)
+    catalog_keys = set()
     for episode in static_episodes:
         key = (safe_int(episode.get("season_number")), safe_int(episode.get("episode_number")))
-        if key not in live_keys:
-            add_api_media(episode)
+        catalog_keys.add(key)
+        add_api_media(enrich_episode_media(episode, detail, series_meta))
+    # Live Webshare search is only a fallback for episodes absent from the
+    # central catalog. It must never replace catalog pagination or hide older
+    # episodes when the provider returned only a partial search window.
+    for (season_number, episode_number), rows in sorted(live_groups.items()):
+        if str(season_number) != str(season) or (season_number, episode_number) in catalog_keys:
+            continue
+        add_live_episode(media_id, detail, season_number, episode_number, rows, series_meta)
     pagination = response.get("pagination") or {}
-    live_for_requested_season = any(key[0] == safe_int(season, -1) for key in live_groups)
-    if not live_for_requested_season:
-        add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_season", params, page)
+    add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_season", params, page)
     xbmcplugin.setContent(HANDLE, "episodes")
     xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
 
 
-def add_live_episode(media_id, detail, season, episode, rows):
+def live_episode_files_for_detail(detail):
+    """Return live Webshare variants only as a fallback for one catalog episode."""
+    if not isinstance(detail, dict) or detail.get("media_type") != "episode":
+        return []
+    parent_id = detail.get("tvshow_id")
+    if not parent_id:
+        return []
+    try:
+        parent_detail = catalog_api().detail(parent_id) or {}
+    except CatalogApiError:
+        return []
+    season = safe_int(detail.get("season_number"), -1)
+    episode = safe_int(detail.get("episode_number"), -1)
+    if season < 0 or episode < 0:
+        return []
+    return live_episode_groups(load_live_series_files(parent_id, parent_detail)).get((season, episode), [])
+
+
+def add_live_episode(media_id, detail, season, episode, rows, series_meta=None):
     title = detail.get("display_title") or detail.get("title") or "Seriál"
     episode_title = "{} S{:02d}E{:02d}".format(title, season, episode)
     item = xbmcgui.ListItem(label=episode_title)
-    meta = api_detail_meta(detail, {})
-    plot = meta.get("overview") or "Popis epizódy nie je dostupný."
+    meta = series_meta or api_detail_meta(detail, {})
+    plot = meta.get("overview") or detail.get("overview") or "Popis epizódy nie je dostupný."
     item.setInfo(
         "video",
         {
@@ -1589,6 +1654,13 @@ def live_media_select(params):
         }
     )
     meta = api_detail_meta(detail, {})
+    if detail.get("tvshow_id"):
+        try:
+            parent_detail = catalog_api().detail(detail.get("tvshow_id")) or {}
+            parent_metadata = catalog_api().metadata(detail.get("tvshow_id")) or {}
+            meta = api_detail_meta(parent_detail, parent_metadata)
+        except CatalogApiError:
+            pass
     items = []
     rows = []
     for file_row in sorted(files, key=variant_sort_key):
@@ -1701,15 +1773,54 @@ def media_display_label(media):
     """Return a library-style label; variant counts remain internal metadata."""
     media = media if isinstance(media, dict) else {}
     media_type = media.get("media_type")
-    title = media.get("title") if media_type == "episode" else media.get("display_title") or media.get("title")
+    title = media.get("series_title") or media.get("title") if media_type == "episode" else media.get("display_title") or media.get("title")
     title = safe_text(title) or "Bez názvu"
     if media_type == "episode":
         season = safe_int(media.get("season_number"))
         episode = safe_int(media.get("episode_number"))
         if season or episode:
-            return "{} (S{:02d}E{:02d})".format(title, season, episode)
+            coordinates = "S{:02d}E{:02d}".format(season, episode)
+            if re.search(r"\bS\d{1,2}E\d{1,2}\b", title, re.IGNORECASE):
+                return title
+            return "{} ({})".format(title, coordinates)
     year = safe_int(media.get("year"))
     return "{} ({})".format(title, year) if year else title
+
+
+def media_plot(media, fallback=""):
+    media = media if isinstance(media, dict) else {}
+    return safe_text(
+        media.get("overview")
+        or media.get("series_overview")
+        or fallback
+    )
+
+
+def enrich_episode_media(episode, series_detail=None, series_meta=None):
+    """Fill episode rows with the parent series metadata without changing identity."""
+    enriched = dict(episode or {})
+    series_detail = series_detail if isinstance(series_detail, dict) else {}
+    series_meta = series_meta if isinstance(series_meta, dict) else {}
+    enriched["series_title"] = (
+        enriched.get("series_title")
+        or series_detail.get("display_title")
+        or series_detail.get("title")
+        or series_meta.get("title")
+        or ""
+    )
+    if not safe_text(enriched.get("overview")):
+        enriched["overview"] = media_plot(enriched, series_meta.get("overview"))
+    if not safe_text(enriched.get("poster_url")):
+        enriched["poster_url"] = enriched.get("series_poster_url") or series_meta.get("poster") or series_detail.get("poster_url") or ""
+    if not safe_text(enriched.get("backdrop_url")):
+        enriched["backdrop_url"] = enriched.get("series_backdrop_url") or series_meta.get("backdrop") or series_detail.get("backdrop_url") or ""
+    if not enriched.get("genres"):
+        enriched["genres"] = series_meta.get("genres") or series_detail.get("genres") or []
+    if not enriched.get("rating"):
+        enriched["rating"] = series_meta.get("rating") or series_detail.get("rating") or 0
+    if not enriched.get("year"):
+        enriched["year"] = series_detail.get("year") or series_meta.get("year")
+    return enriched
 
 
 def human_file_size(value):

@@ -173,6 +173,21 @@ class PublicCatalogTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result["data"]], [4, 5, 6])
         self.assertEqual(result["pagination"], {"page": 2, "limit": 3, "total": 7, "pages": 3, "has_more": True})
 
+    def test_episode_recent_listing_returns_parent_metadata_and_uses_episode_identity(self):
+        client = self.client()
+        client._manifest["listings"] = [{
+            "category": "series", "sort": "episode_recent", "order": "desc", "chunk_size": 2,
+            "record_count": 1, "shards": [{"sha256": "recent", "range": 0}],
+        }]
+        client._objects["recent"] = [{
+            "id": 2, "category": "series", "media_type": "episode", "title": "Gold Rush S17E01",
+            "display_title": "Gold Rush S17E01", "series_title": "Gold Rush", "series_overview": "Series plot",
+            "season_number": 17, "episode_number": 1, "tvshow_id": 1000727,
+        }]
+        result = client.media(category="series", type="episode", sort="episode_recent", page=1, limit=20)
+        self.assertEqual(result["data"][0]["id"], 2)
+        self.assertEqual(result["data"][0]["series_overview"], "Series plot")
+
     def test_generation_activation_discards_old_in_memory_listing_records(self):
         client = self.client()
         client._manifest["generation_id"] = "old"

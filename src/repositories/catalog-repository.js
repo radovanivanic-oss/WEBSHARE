@@ -145,6 +145,10 @@ function serializeMedia(row) {
     season_number: row.season_number,
     episode_number: row.episode_number,
     tvshow_id: row.tvshow_id,
+    series_title: row.series_title ?? null,
+    series_overview: row.series_overview ?? null,
+    series_poster_url: row.series_poster_url ?? null,
+    series_backdrop_url: row.series_backdrop_url ?? null,
     overview: row.overview,
     genres: parseJson(row.genres_json, []),
     runtime_minutes: row.runtime_minutes,
@@ -426,7 +430,12 @@ function createCatalogRepository(database, config) {
         ORDER BY ${sortColumn} ${order}, m.id ${order}
         LIMIT ? OFFSET ?
       )
-      SELECT m.*, CASE WHEN m.media_type = 'tv' THEN (
+      SELECT m.*,
+      CASE WHEN m.media_type = 'episode' THEN (SELECT parent.title FROM media parent WHERE parent.id = m.tvshow_id) END AS series_title,
+      CASE WHEN m.media_type = 'episode' THEN (SELECT parent.overview FROM media parent WHERE parent.id = m.tvshow_id) END AS series_overview,
+      CASE WHEN m.media_type = 'episode' THEN (SELECT parent.poster_url FROM media parent WHERE parent.id = m.tvshow_id) END AS series_poster_url,
+      CASE WHEN m.media_type = 'episode' THEN (SELECT parent.backdrop_url FROM media parent WHERE parent.id = m.tvshow_id) END AS series_backdrop_url,
+      CASE WHEN m.media_type = 'tv' THEN (
         SELECT COUNT(*) FROM media episode_media
         JOIN files episode_file INDEXED BY idx_files_media_active_playable_recent
           ON episode_file.media_id = episode_media.id
@@ -467,7 +476,12 @@ function createCatalogRepository(database, config) {
 
   function getMedia(id) {
     const row = database.prepare(`
-      SELECT m.*, CASE WHEN m.media_type = 'tv' THEN (
+      SELECT m.*,
+      CASE WHEN m.media_type = 'episode' THEN (SELECT parent.title FROM media parent WHERE parent.id = m.tvshow_id) END AS series_title,
+      CASE WHEN m.media_type = 'episode' THEN (SELECT parent.overview FROM media parent WHERE parent.id = m.tvshow_id) END AS series_overview,
+      CASE WHEN m.media_type = 'episode' THEN (SELECT parent.poster_url FROM media parent WHERE parent.id = m.tvshow_id) END AS series_poster_url,
+      CASE WHEN m.media_type = 'episode' THEN (SELECT parent.backdrop_url FROM media parent WHERE parent.id = m.tvshow_id) END AS series_backdrop_url,
+      CASE WHEN m.media_type = 'tv' THEN (
         SELECT COUNT(*) FROM media episode_media JOIN files episode_file ON episode_file.media_id = episode_media.id
         WHERE episode_media.tvshow_id = m.id AND episode_file.is_active = 1 AND episode_file.is_playable_video = 1
       ) ELSE (
@@ -528,11 +542,17 @@ function createCatalogRepository(database, config) {
       WHERE episode.tvshow_id = ? AND episode.is_active = 1 ${seasonSql}
     `).get(...values).count;
     const rows = database.prepare(`
-      SELECT episode.*, (
+      SELECT episode.*,
+        series.title AS series_title,
+        series.overview AS series_overview,
+        series.poster_url AS series_poster_url,
+        series.backdrop_url AS series_backdrop_url,
+        (
         SELECT COUNT(*) FROM files f
         WHERE f.media_id = episode.id AND f.is_active = 1 AND f.is_playable_video = 1
       ) AS version_count
       FROM media episode
+      JOIN media series ON series.id = episode.tvshow_id
       WHERE episode.tvshow_id = ? AND episode.is_active = 1 ${seasonSql}
       ORDER BY episode.season_number, episode.episode_number, episode.id
       LIMIT ? OFFSET ?

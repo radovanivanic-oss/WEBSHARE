@@ -117,6 +117,7 @@ test("catalog API paginates, limits output and exposes versions without tokens",
   assert.equal(series.statusCode, 200);
   assert.equal(series.json().data.length, 1);
   assert.equal(series.json().data[0].media_type, "tv");
+  database.prepare("UPDATE media SET overview = ?, poster_url = ?, backdrop_url = ? WHERE media_type = 'tv'").run("Series overview", "https://img/series.jpg", "https://img/backdrop.jpg");
   const seasons = await app.inject({ method: "GET", url: `/api/media/${series.json().data[0].id}/seasons` });
   assert.equal(seasons.statusCode, 200);
   assert.deepEqual(seasons.json().data, [{ season_number: 1, episode_count: 1 }]);
@@ -127,6 +128,12 @@ test("catalog API paginates, limits output and exposes versions without tokens",
   const episodes = await app.inject({ method: "GET", url: `/api/media/${series.json().data[0].id}/episodes?season=1` });
   assert.equal(episodes.statusCode, 200);
   assert.equal(episodes.json().data.length, 1);
+  assert.equal(episodes.json().data[0].series_overview, "Series overview");
+  assert.equal(episodes.json().data[0].series_poster_url, "https://img/series.jpg");
+  const recentEpisodes = await app.inject({ method: "GET", url: "/api/media?category=series&type=episode&sort=recent" });
+  assert.equal(recentEpisodes.statusCode, 200);
+  assert.equal(recentEpisodes.json().data[0].media_type, "episode");
+  assert.equal(recentEpisodes.json().data[0].series_overview, "Series overview");
   } finally {
     await app.close();
     database.close();

@@ -33,6 +33,26 @@ function normalizeTitle(value) {
     .trim();
 }
 
+function tvCandidateScore(query, candidate, requestedYear) {
+  const wanted = normalizeTitle(query);
+  const names = [candidate?.name, candidate?.original_name]
+    .map(normalizeTitle)
+    .filter(Boolean);
+  if (!wanted || !names.length) return 0;
+  if (names.includes(wanted)) return 1;
+  const wantedTokens = new Set(wanted.split(/\s+/u).filter(Boolean));
+  let best = 0;
+  for (const name of names) {
+    const candidateTokens = new Set(name.split(/\s+/u).filter(Boolean));
+    const overlap = [...wantedTokens].filter((token) => candidateTokens.has(token)).length;
+    const coverage = overlap / Math.max(wantedTokens.size, candidateTokens.size);
+    best = Math.max(best, coverage);
+  }
+  const candidateYear = Number.parseInt(String(candidate?.first_air_date || "").slice(0, 4), 10);
+  if (requestedYear && candidateYear && Math.abs(candidateYear - Number(requestedYear)) <= 1) best += 0.08;
+  return Math.min(1, best);
+}
+
 function imageUrl(path, size) {
   return path ? `${TMDB_IMAGE_BASE_URL}/${size}${path}` : null;
 }
@@ -60,7 +80,7 @@ function mergeDetails(primary, fallback) {
   if (!primary) return fallback;
   if (!fallback) return primary;
   const result = { ...primary };
-  for (const key of ["overview", "poster_path", "backdrop_path", "runtime", "episode_run_time", "vote_average", "genres"]) {
+  for (const key of ["overview", "poster_path", "still_path", "backdrop_path", "runtime", "episode_run_time", "vote_average", "genres"]) {
     if ((!result[key] || (Array.isArray(result[key]) && result[key].length === 0)) && fallback[key]) {
       result[key] = fallback[key];
     }
@@ -94,6 +114,31 @@ function serializeDetails(media, details, language) {
   };
 }
 
+function serializeEpisodeDetails(media, details, language, tvId) {
+  const overview = String(details.overview || "").trim() || null;
+  const posterUrl = imageUrl(details.still_path, "w500");
+  const runtime = Number(details.runtime);
+  const rating = Number(details.vote_average);
+  const available = Boolean(overview || posterUrl || runtime || rating);
+  return {
+    available,
+    metadataAvailable: available,
+    source: "tmdb",
+    externalId: String(media.external_id),
+    externalUrl: `https://www.themoviedb.org/tv/${tvId}/season/${media.season_number}/episode/${media.episode_number}`,
+    overview,
+    posterUrl,
+    backdropUrl: null,
+    genres: [],
+    runtimeMinutes: Number.isFinite(runtime) && runtime > 0 ? runtime : null,
+    rating: Number.isFinite(rating) && rating > 0 ? rating : null,
+    language,
+    message: overview ? null : "Popis nie je k dispozícii.",
+    cached: false,
+    stale: false,
+  };
+}
+
 function errorKind(error) {
   const status = error.response?.status;
   if (status === 404) return "not_found";
@@ -105,6 +150,7 @@ function errorKind(error) {
 class TmdbLiveMetadata {
   constructor(config, database, logger = console) {
     this.config = config;
+    this.database = database;
     this.logger = logger;
     this.client = axios.create({
       baseURL: TMDB_BASE_URL,
@@ -159,6 +205,7 @@ class TmdbLiveMetadata {
   }
 
   async get(media) {
+    if (media.media_type === "episode") return this.getEpisode(media);
     if (!new Set(["movie", "tv"]).has(media.media_type)) {
       return unavailable(media, "unsupported_media_type");
     }
@@ -237,7 +284,91 @@ class TmdbLiveMetadata {
       const status = kind === "not_found" ? "not_found" : kind === "INVALID_RESPONSE" ? "invalid_response" : "temporary_error";
       const ttl = kind === "not_found" ? 3600000 : this.config.tmdbLiveErrorTtlMinutes * 60000;
       this.writeCache(key, cacheMedia, languages, null, status, kind, ttl, ttl);
-      this.logger.warn?.({ status: error.response?.status || null, code: error.code || null }, "TMDb live metadata unavailable");
+      this.logger.warn?.({ status: error.response?.status || null, code: error.code || null, message: error.message || null }, "TMDb live metadata unavailable");
+      return unavailable(media, kind);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async getEpisode(media) {
+    const parent = media.tvshow_id
+      ? this.database.prepare("SELECT * FROM media WHERE id = ? AND media_type = 'tv'").get(media.tvshow_id)
+      : null;
+    const series = parent || media;
+    const season = Number.parseInt(media.season_number, 10);
+    const episode = Number.parseInt(media.episode_number, 10);
+    if (!Number.isInteger(season) || season < 0 || !Number.isInteger(episode) || episode < 0) {
+      return unavailable(media, "episode_coordinates_missing");
+    }
+
+    const languages = this.languages();
+    let lookup = series;
+    let showId = series.external_source === "tmdb" && /^\d+$/.test(String(series.external_id || ""))
+      ? String(series.external_id)
+      : null;
+    const cacheMedia = {
+      ...media,
+      external_source: "tmdb",
+      external_id: showId ? `${showId}:s${season}:e${episode}` : `${media.tvshow_id || media.id}:s${season}:e${episode}`,
+      media_type: "episode",
+    };
+    let key = cacheKey(cacheMedia, languages);
+    const now = new Date().toISOString();
+    const cached = this.getCache.get(key);
+    if (cached && cached.expires_at > now) {
+      return this.cachedPayload(cached) || unavailable(media, cached.error_code || cached.status, { cached: true });
+    }
+    if (!this.config.tmdbApiKey) {
+      const stale = cached && cached.stale_until > now ? this.cachedPayload(cached, { stale: true }) : null;
+      return stale || unavailable(media, "metadata_disabled");
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.config.tmdbLiveTotalTimeoutMs);
+    try {
+      if (!showId) {
+        lookup = await this.findTvShow(series, languages, controller.signal);
+        showId = lookup?.external_id ? String(lookup.external_id) : null;
+      }
+      if (!showId) {
+        this.writeCache(key, cacheMedia, languages, null, "not_found", "tv_not_found", 3600000, 3600000);
+        return unavailable(media, "tv_not_found");
+      }
+      cacheMedia.external_id = `${showId}:s${season}:e${episode}`;
+      // When the parent series had no stored TMDb ID, the first lookup used a
+      // local episode identity.  Store the resolved episode under the stable
+      // TMDb identity as well, so a later request can reuse the same cache
+      // entry instead of doing the title search again.
+      const resolvedKey = cacheKey(cacheMedia, languages);
+      let merged = null;
+      let selectedLanguage = languages[0] || "sk-SK";
+      for (const language of languages) {
+        const response = await this.client.get(`/tv/${showId}/season/${season}/episode/${episode}`, {
+          params: { api_key: this.config.tmdbApiKey, language },
+          signal: controller.signal,
+        });
+        if (!response.data || typeof response.data !== "object") {
+          throw Object.assign(new Error("invalid_tmdb_response"), { code: "INVALID_RESPONSE" });
+        }
+        merged = mergeDetails(merged, response.data);
+        if (String(response.data.overview || "").trim()) {
+          selectedLanguage = language;
+          break;
+        }
+      }
+      const payload = serializeEpisodeDetails(cacheMedia, merged || {}, selectedLanguage, showId);
+      key = resolvedKey;
+      this.writeCache(key, cacheMedia, languages, payload, "ok", null, this.config.tmdbLiveCacheTtlHours * 3600000, this.config.tmdbLiveStaleTtlHours * 3600000);
+      return payload;
+    } catch (error) {
+      const kind = errorKind(error);
+      const stale = cached && cached.stale_until > now ? this.cachedPayload(cached, { stale: true }) : null;
+      if (stale) return stale;
+      const status = kind === "not_found" ? "not_found" : kind === "INVALID_RESPONSE" ? "invalid_response" : "temporary_error";
+      const ttl = kind === "not_found" ? 3600000 : this.config.tmdbLiveErrorTtlMinutes * 60000;
+      this.writeCache(key, cacheMedia, languages, null, status, kind, ttl, ttl);
+      this.logger.warn?.({ status: error.response?.status || null, code: error.code || null, message: error.message || null }, "TMDb live episode metadata unavailable");
       return unavailable(media, kind);
     } finally {
       clearTimeout(timeoutId);
@@ -249,6 +380,7 @@ class TmdbLiveMetadata {
     if (!query) return null;
 
     const normalizedQuery = normalizeTitle(query);
+    const candidates = new Map();
     for (const language of languages) {
       const response = await this.client.get("/search/tv", {
         params: {
@@ -261,19 +393,33 @@ class TmdbLiveMetadata {
         signal,
       });
       const results = Array.isArray(response.data?.results) ? response.data.results : [];
-      if (!results.length) continue;
-      const exact = results.find((item) => normalizeTitle(item.name || item.original_name) === normalizedQuery);
-      const selected = exact || results[0];
-      if (selected?.id) {
+      const exact = results.find((candidate) => {
+        const names = [candidate?.name, candidate?.original_name].map(normalizeTitle);
+        const candidateYear = Number.parseInt(String(candidate?.first_air_date || "").slice(0, 4), 10);
+        return names.includes(normalizedQuery)
+          && (!media.year || !candidateYear || Math.abs(candidateYear - Number(media.year)) <= 1);
+      });
+      if (exact?.id) {
         return {
           ...media,
           external_source: "tmdb",
-          external_id: String(selected.id),
-          external_url: `https://www.themoviedb.org/tv/${selected.id}`,
+          external_id: String(exact.id),
+          external_url: `https://www.themoviedb.org/tv/${exact.id}`,
         };
       }
+      for (const result of results) if (result?.id) candidates.set(String(result.id), result);
     }
-    return null;
+    const ranked = [...candidates.values()]
+      .map((candidate) => ({ candidate, score: tvCandidateScore(normalizedQuery, candidate, media.year) }))
+      .sort((left, right) => right.score - left.score || Number(right.candidate.id) - Number(left.candidate.id));
+    const selected = ranked.find((entry) => entry.score >= 0.88)?.candidate;
+    if (!selected?.id) return null;
+    return {
+      ...media,
+      external_source: "tmdb",
+      external_id: String(selected.id),
+      external_url: `https://www.themoviedb.org/tv/${selected.id}`,
+    };
   }
 }
 
@@ -284,6 +430,8 @@ module.exports = {
   mergeDetails,
   normalizeTitle,
   serializeDetails,
+  serializeEpisodeDetails,
+  tvCandidateScore,
   titleCacheId,
   unavailable,
 };

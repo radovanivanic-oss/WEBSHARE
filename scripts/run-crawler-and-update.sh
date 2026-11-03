@@ -23,6 +23,7 @@ fi
 # Continue through that bounded window for discovery, while the manifest stays
 # explicitly incomplete because the provider does not prove completeness.
 export CRAWLER_BEST_EFFORT_SEARCH=true
+export CRAWLER_BEST_EFFORT_PARTITIONING=true
 export CRAWLER_MAX_PAGES_PER_PREFIX=110
 
 set -a

@@ -16,7 +16,7 @@ from resources.lib.catalog_api import CatalogApiError
 from resources.lib.paths import profile_path
 
 
-USER_AGENT = "Webshare Atlas Public Catalog/0.8.31"
+USER_AGENT = "Webshare Atlas Public Catalog/0.8.32"
 ROOT_SCHEMA = "webshare-atlas-public-catalog/v1"
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 PUBLIC_CATALOG_RELEASE_REPOSITORY = "radovanivanic-oss/AG_repo"
@@ -112,6 +112,7 @@ class PublicCatalogClient(object):
         self._search_indexes = {}
         self._objects = {}
         self._episode_records = {}
+        self._recent_episode_rows = None
         self._pending_activation = False
 
     def _path(self, name):
@@ -168,6 +169,7 @@ class PublicCatalogClient(object):
             self._search_indexes = {}
             self._objects = {}
             self._episode_records = {}
+            self._recent_episode_rows = None
         if pointer.get("manifest_sha256") and _sha256(json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) != pointer.get("manifest_sha256"):
             # GitHub raw files normally preserve the builder's trailing newline; accept the
             # canonical JSON hash only when a server-side pointer does not include a hash.
@@ -318,7 +320,7 @@ class PublicCatalogClient(object):
     def _matches(self, row, query):
         query_tokens = _tokens(query)
         haystack = []
-        for key in ("display_title", "title", "original_title"):
+        for key in ("display_title", "title", "original_title", "series_title"):
             haystack.extend(_tokens(row.get(key) or ""))
         for alias in row.get("aliases") or []:
             haystack.extend(_tokens(alias))
@@ -326,6 +328,7 @@ class PublicCatalogClient(object):
 
     def media(self, **params):
         category = params.get("category")
+        media_type = params.get("type")
         categories = [category] if category else [row.get("category") for row in self._ensure_manifest().get("categories", [])]
         query = params.get("query") or params.get("q")
         sort = params.get("sort") or "recent"
@@ -335,9 +338,14 @@ class PublicCatalogClient(object):
             listing_page = self._listing_page(categories[0], sort, page, limit)
             if listing_page is not None:
                 return listing_page
-        rows = []
-        for category_name in categories:
-            rows.extend(self._category_records(category_name))
+        if media_type == "episode":
+            rows = list(self._recent_episode_rows_for_listing())
+        else:
+            rows = []
+            for category_name in categories:
+                rows.extend(self._category_records(category_name))
+        if media_type:
+            rows = [row for row in rows if row.get("media_type") == media_type]
         if query:
             query_tokens = _tokens(query)
             candidate_ids = None
@@ -366,6 +374,31 @@ class PublicCatalogClient(object):
         start = (page - 1) * limit
         page_rows = rows[start:start + limit]
         return {"data": page_rows, "pagination": {"page": page, "limit": limit, "total": len(rows), "pages": (len(rows) + limit - 1) // limit, "has_more": start + limit < len(rows)}}
+
+    def _recent_episode_rows_for_listing(self):
+        if self._recent_episode_rows is not None:
+            return self._recent_episode_rows
+        rows = []
+        for shard in self._ensure_manifest().get("episodes", {}).get("shards", []):
+            for episode_group in self._object(shard):
+                try:
+                    series = self.detail(episode_group.get("id")) or {}
+                except PublicCatalogError:
+                    series = {}
+                for episode in episode_group.get("episodes") or []:
+                    row = dict(episode)
+                    row["series_title"] = series.get("display_title") or series.get("title") or ""
+                    row["series_overview"] = series.get("overview")
+                    row["series_poster_url"] = series.get("poster_url")
+                    row["series_backdrop_url"] = series.get("backdrop_url")
+                    row["genres"] = row.get("genres") or series.get("genres") or []
+                    season = int(row.get("season_number") or 0)
+                    number = int(row.get("episode_number") or 0)
+                    row["display_title"] = "{} S{:02d}E{:02d}".format(row["series_title"] or row.get("title") or "", season, number).strip()
+                    rows.append(row)
+        rows.sort(key=lambda row: (row.get("release_date") or "", row.get("id") or 0), reverse=True)
+        self._recent_episode_rows = rows
+        return rows
 
     def search(self, query, **params):
         params["query"] = query
@@ -439,7 +472,21 @@ class PublicCatalogClient(object):
         rows = group.get("episodes") or []
         if season not in (None, ""):
             rows = [row for row in rows if int(row.get("season_number") or 0) == int(season)]
-        rows = [dict(row, display_title=self.detail(media_id).get("display_title")) for row in rows]
+        series = self.detail(media_id)
+        rows = [
+            dict(
+                row,
+                display_title=series.get("display_title"),
+                series_title=series.get("display_title") or series.get("title"),
+                series_overview=series.get("overview"),
+                series_poster_url=series.get("poster_url"),
+                series_backdrop_url=series.get("backdrop_url"),
+                genres=row.get("genres") or series.get("genres") or [],
+                poster_url=row.get("poster_url") or series.get("poster_url"),
+                backdrop_url=row.get("backdrop_url") or series.get("backdrop_url"),
+            )
+            for row in rows
+        ]
         page = max(1, int(page)); limit = max(1, min(100, int(limit))); start = (page - 1) * limit
         return {"data": rows[start:start + limit], "pagination": {"page": page, "limit": limit, "total": len(rows), "pages": (len(rows) + limit - 1) // limit}}
 
