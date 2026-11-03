@@ -10,7 +10,7 @@ https://radovanivanic-oss.github.io/AG_repo/
 The existing Kodi repository addon ID is preserved as
 `repository.websharecrawler` for upgrade compatibility. Its display name is
 Webshare Atlas Repository. The video addon remains
-`plugin.video.websharecrawler`, currently version `0.8.28`.
+`plugin.video.websharecrawler`, currently version `0.8.29`.
 
 ## Install
 
