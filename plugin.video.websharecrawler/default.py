@@ -133,6 +133,28 @@ def notify(message, icon=xbmcgui.NOTIFICATION_INFO):
     xbmcgui.Dialog().notification(ADDON.getAddonInfo("name"), message, icon)
 
 
+def finish_resolved(success, item=None):
+    """Finish a plugin playback request in the same way as Kodi reference add-ons.
+
+    ``setResolvedUrl`` alone is not enough when the request was opened from a
+    plugin directory. Kodi still waits for ``endOfDirectory`` and otherwise
+    leaves the user in an empty ``Videos 0/0`` container after the source
+    selector closes.
+    """
+    if item is None:
+        item = xbmcgui.ListItem()
+    try:
+        xbmcplugin.setResolvedUrl(HANDLE, bool(success), item)
+    finally:
+        try:
+            xbmcplugin.endOfDirectory(HANDLE, succeeded=bool(success))
+        except Exception:
+            # The resolved URL has already been handed to Kodi. A skin or an
+            # older Kodi build must not turn a successful playback into an
+            # addon traceback just because it rejects the final directory call.
+            pass
+
+
 def store():
     return AtlasStore()
 
@@ -1253,12 +1275,12 @@ def api_media_select(params):
         meta = api_detail_meta(detail, live_metadata)
     except CatalogApiError as exc:
         notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
-        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        finish_resolved(False)
         return
 
     if not files:
         notify("Pre toto médium nie sú dostupné žiadne zdroje", xbmcgui.NOTIFICATION_ERROR)
-        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        finish_resolved(False)
         return
 
     items = []
@@ -1276,7 +1298,7 @@ def api_media_select(params):
     except TypeError:
         selected = xbmcgui.Dialog().select(heading, items)
     if selected is None or selected < 0 or selected >= len(rows):
-        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        finish_resolved(False)
         return
     selected_row = rows[selected]
     play_video({"ident": selected_row["ident"], "title": heading})
@@ -1504,12 +1526,12 @@ def live_media_select(params):
         files = live_episode_groups(load_live_series_files(media_id, detail)).get((season, episode), [])
     except CatalogApiError as exc:
         notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
-        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        finish_resolved(False)
         return
 
     if not files:
         notify("Pre túto epizódu už Webshare nevracia žiadny zdroj", xbmcgui.NOTIFICATION_ERROR)
-        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        finish_resolved(False)
         return
 
     episode_detail = dict(detail)
@@ -1537,7 +1559,7 @@ def live_media_select(params):
     except TypeError:
         selected = xbmcgui.Dialog().select(heading, items)
     if selected is None or selected < 0 or selected >= len(rows):
-        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        finish_resolved(False)
         return
     play_video({"ident": rows[selected]["ident"], "title": heading})
 
@@ -2351,13 +2373,13 @@ def play_video(params):
         stream_url = resolver.resolve(ident)
     except ResolverError as exc:
         notify("Resolver zlyhal: {}".format(exc), xbmcgui.NOTIFICATION_ERROR)
-        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        finish_resolved(False)
         return
 
     store().record_play_start(ident)
     play_item = xbmcgui.ListItem(path=stream_url, label=title)
     play_item.setProperty("IsPlayable", "true")
-    xbmcplugin.setResolvedUrl(HANDLE, True, play_item)
+    finish_resolved(True, play_item)
 
 
 def continue_menu(params):

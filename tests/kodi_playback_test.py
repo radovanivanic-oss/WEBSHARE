@@ -313,6 +313,7 @@ class ResolverTests(unittest.TestCase):
 class KodiPlaybackTests(unittest.TestCase):
     def setUp(self):
         addon.xbmcplugin.resolved[:] = []
+        addon.xbmcplugin.ended[:] = []
         self.store = mock.Mock()
         self.store.get_item.return_value = {"title": "Fixture title"}
         self.settings = {"username": "fixture-user", "password": "fixture-password"}
@@ -338,6 +339,7 @@ class KodiPlaybackTests(unittest.TestCase):
         self.assertTrue(succeeded)
         self.assertEqual(item.path, "https://media.example.test/fixture.mkv")
         self.assertEqual(item.properties["IsPlayable"], "true")
+        self.assertEqual(addon.xbmcplugin.ended[-1][1], {"succeeded": True})
         self.store.record_play_start.assert_called_once_with("fixture-ident")
 
     def test_failed_resolution_sets_resolved_url_false(self):
@@ -347,6 +349,7 @@ class KodiPlaybackTests(unittest.TestCase):
             addon.play_video({"ident": "fixture-ident", "title": "Fixture title"})
         self.assertEqual(len(addon.xbmcplugin.resolved), 1)
         self.assertFalse(addon.xbmcplugin.resolved[0][1])
+        self.assertEqual(addon.xbmcplugin.ended[-1][1], {"succeeded": False})
         self.store.record_play_start.assert_not_called()
 
 
