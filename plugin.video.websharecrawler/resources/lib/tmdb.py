@@ -12,7 +12,7 @@ from resources.lib.metadata import YEAR_RE, normalize_title
 
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMAGE = "https://image.tmdb.org/t/p/"
-USER_AGENT = "Webshare Atlas Kodi Addon/0.8.33"
+USER_AGENT = "Webshare Atlas Kodi Addon/0.8.34"
 
 
 def clean_query(title):
