@@ -17,7 +17,7 @@ function buildFixture(root) {
   return build({
     repositoryRoot: process.cwd(),
     publicBase: "https://radovanivanic-oss.github.io/AG_repo/",
-    videoVersion: "0.8.32",
+    videoVersion: "0.8.33",
     outputRoot: root,
   });
 }
@@ -45,13 +45,13 @@ test("Kodi distribution build is complete, deterministic and publicly addressed"
   assert.match(addonsXml.toString("utf8"), /radovanivanic-oss\.github\.io\/AG_repo/);
   assert.doesNotMatch(addonsXml.toString("utf8"), /raw\.githubusercontent\.com|localhost|127\.0\.0\.1|192\.168\./iu);
 
-  const pluginZip = path.join(firstRoot, "plugin.video.websharecrawler", "plugin.video.websharecrawler-0.8.32.zip");
+  const pluginZip = path.join(firstRoot, "plugin.video.websharecrawler", "plugin.video.websharecrawler-0.8.33.zip");
   const repositoryZip = path.join(firstRoot, "repository.websharecrawler", "repository.websharecrawler-1.0.8.zip");
   const pluginEntries = execFileSync("unzip", ["-Z1", pluginZip], { encoding: "utf8" }).trim().split(/\r?\n/u);
   const repositoryEntries = execFileSync("unzip", ["-Z1", repositoryZip], { encoding: "utf8" }).trim().split(/\r?\n/u);
   assert.ok(pluginEntries.includes("plugin.video.websharecrawler/addon.xml"));
   assert.ok(repositoryEntries.includes("repository.websharecrawler/addon.xml"));
   assert.ok(pluginEntries.every((entry) => !/(?:\.git|runtime|__pycache__|\.pyc|\.sqlite|\.env)/iu.test(entry)));
-  assert.deepEqual(sha256(pluginZip), sha256(path.join(secondRoot, "plugin.video.websharecrawler", "plugin.video.websharecrawler-0.8.32.zip")));
+  assert.deepEqual(sha256(pluginZip), sha256(path.join(secondRoot, "plugin.video.websharecrawler", "plugin.video.websharecrawler-0.8.33.zip")));
   assert.deepEqual(sha256(repositoryZip), sha256(path.join(secondRoot, "repository.websharecrawler", "repository.websharecrawler-1.0.8.zip")));
 });

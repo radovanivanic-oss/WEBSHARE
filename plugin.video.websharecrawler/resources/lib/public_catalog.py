@@ -16,7 +16,7 @@ from resources.lib.catalog_api import CatalogApiError
 from resources.lib.paths import profile_path
 
 
-USER_AGENT = "Webshare Atlas Public Catalog/0.8.32"
+USER_AGENT = "Webshare Atlas Public Catalog/0.8.33"
 ROOT_SCHEMA = "webshare-atlas-public-catalog/v1"
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 PUBLIC_CATALOG_RELEASE_REPOSITORY = "radovanivanic-oss/AG_repo"
@@ -491,7 +491,11 @@ class PublicCatalogClient(object):
         return {"data": rows[start:start + limit], "pagination": {"page": page, "limit": limit, "total": len(rows), "pages": (len(rows) + limit - 1) // limit}}
 
     def seasons(self, media_id):
-        rows = (self._range_item("episodes", media_id) or {}).get("episodes") or []
+        group = self._range_item("episodes", media_id) or {}
+        summaries = group.get("seasons") or []
+        if summaries:
+            return {"data": summaries}
+        rows = group.get("episodes") or []
         groups = {}
         for row in rows:
             season = int(row.get("season_number") or 0)

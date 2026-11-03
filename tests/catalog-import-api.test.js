@@ -120,7 +120,11 @@ test("catalog API paginates, limits output and exposes versions without tokens",
   database.prepare("UPDATE media SET overview = ?, poster_url = ?, backdrop_url = ? WHERE media_type = 'tv'").run("Series overview", "https://img/series.jpg", "https://img/backdrop.jpg");
   const seasons = await app.inject({ method: "GET", url: `/api/media/${series.json().data[0].id}/seasons` });
   assert.equal(seasons.statusCode, 200);
-  assert.deepEqual(seasons.json().data, [{ season_number: 1, episode_count: 1 }]);
+  assert.deepEqual(seasons.json().data, [{
+    season_number: 1,
+    episode_count: 1,
+    languages: ["CZ", "EN"],
+  }]);
   const lightSeries = await app.inject({ method: "GET", url: "/api/media?category=series&light=1&limit=1" });
   assert.equal(lightSeries.statusCode, 200);
   assert.equal(lightSeries.json().pagination.total, null);

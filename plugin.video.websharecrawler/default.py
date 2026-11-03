@@ -133,6 +133,44 @@ def notify(message, icon=xbmcgui.NOTIFICATION_INFO):
     xbmcgui.Dialog().notification(ADDON.getAddonInfo("name"), message, icon)
 
 
+def set_plugin_category(label):
+    """Set the Kodi breadcrumb without depending on a particular skin."""
+    setter = getattr(xbmcplugin, "setPluginCategory", None)
+    if not setter:
+        return
+    try:
+        setter(HANDLE, safe_text(label))
+    except Exception:
+        pass
+
+
+def set_item_label2(item, label):
+    setter = getattr(item, "setLabel2", None)
+    if setter:
+        try:
+            setter(safe_text(label))
+        except Exception:
+            pass
+
+
+def format_runtime(minutes):
+    minutes = safe_int(minutes, 0)
+    if minutes <= 0:
+        return ""
+    return "{}:{:02d}".format(minutes // 60, minutes % 60)
+
+
+def display_languages(value):
+    values = []
+    for item in safe_text_list(value):
+        for part in re.split(r"[,/+ ]", item):
+            part = part.strip().upper()
+            if part and part not in values and part not in ("UNKNOWN", "NONE"):
+                values.append(part)
+    preferred = ("SK", "CZ", "EN", "HU", "PL", "DE", "FR", "ES", "RU")
+    return sorted(values, key=lambda item: (preferred.index(item) if item in preferred else len(preferred), item))
+
+
 def finish_resolved(success, item=None):
     """Finish a plugin playback request in the same way as Kodi reference add-ons.
 
@@ -224,8 +262,10 @@ def live_series_ttl_seconds():
     return max(1, int_setting("live_series_cache_ttl_hours", 6)) * 3600
 
 
-def live_series_cache_key(media_id):
-    return "live-series-files:{}".format(media_id)
+def live_series_cache_key(media_id, season_numbers=None):
+    numbers = sorted(set(safe_int(value, -1) for value in (season_numbers or []) if safe_int(value, -1) >= 0))
+    suffix = ",".join(str(value) for value in numbers) if numbers else "all"
+    return "live-series-files-v2:{}:{}".format(media_id, suffix)
 
 
 def normalized_live_title(value):
@@ -251,7 +291,7 @@ def live_file_belongs_to_series(row, title):
     return actual == expected
 
 
-def load_live_series_files(media_id, detail):
+def load_live_series_files(media_id, detail, season_numbers=None):
     if not live_series_enabled():
         return []
 
@@ -259,7 +299,8 @@ def load_live_series_files(media_id, detail):
     if not safe_text(title):
         return []
 
-    key = live_series_cache_key(media_id)
+    requested_seasons = sorted(set(safe_int(value, -1) for value in (season_numbers or []) if safe_int(value, -1) >= 0))
+    key = live_series_cache_key(media_id, requested_seasons)
     try:
         cached = store().metadata_get_many([key], live_series_ttl_seconds())
     except Exception:
@@ -269,10 +310,49 @@ def load_live_series_files(media_id, detail):
         return payload.get("files") or [] if isinstance(payload, dict) else []
 
     try:
-        result = WebshareResolver(
+        resolver = WebshareResolver(
             username=setting("username"),
             password=setting("password"),
-        ).search_series(title, max_files=1000)
+        )
+        result = resolver.search_series(title, max_files=5000)
+        rows_by_ident = {
+            row.get("ident"): row
+            for row in result.get("files") or []
+            if isinstance(row, dict) and row.get("ident")
+        }
+        found_seasons = {
+            safe_int(row.get("season_number"), -1)
+            for row in rows_by_ident.values()
+            if safe_int(row.get("season_number"), -1) >= 0
+        }
+        # Webshare's broad search is ordered by recency and may report a
+        # small total while omitting older seasons. Probe season tokens so a
+        # single popular series cannot lose its first seasons.
+        probe_seasons = requested_seasons or list(range(0, max(20, max(found_seasons or {0}) + 1)))
+        for season_number in probe_seasons:
+            if season_number in found_seasons and requested_seasons:
+                continue
+            queries = (
+                "{} S{:02d}".format(title, season_number),
+                "{} Season {}".format(title, season_number),
+            )
+            season_rows = []
+            for query in queries:
+                try:
+                    season_result = resolver.search_series(query, max_files=1000)
+                except ResolverError:
+                    continue
+                season_rows.extend(season_result.get("files") or [])
+                if season_rows:
+                    break
+            for row in season_rows:
+                if not isinstance(row, dict) or not row.get("ident"):
+                    continue
+                if safe_int(row.get("season_number"), -1) != season_number:
+                    continue
+                if live_file_belongs_to_series(row, title):
+                    rows_by_ident[row["ident"]] = row
+        result = {"total": max(int(result.get("total") or 0), len(rows_by_ident)), "files": list(rows_by_ident.values())}
     except ResolverError:
         return []
     rows = [
@@ -367,6 +447,16 @@ def add_directory(label, action, query=None):
     query = query or {}
     query["action"] = action
     item = xbmcgui.ListItem(label=label)
+    # Kodi skins use these fields for folder tiles and the right-hand
+    # information panel.  The old menu only supplied a bare label, which is
+    # why it looked empty compared with Stream Cinema even when the route was
+    # correct.
+    try:
+        menu_art = fallback_art()
+        item.setArt({"icon": menu_art, "thumb": menu_art, "poster": menu_art, "fanart": menu_art})
+        item.setInfo("video", {"title": safe_text(label), "mediatype": "video"})
+    except Exception:
+        pass
     add_home_context(item, label, query)
     xbmcplugin.addDirectoryItem(HANDLE, addon_url(query), item, isFolder=True)
 
@@ -375,6 +465,12 @@ def add_command(label, action, query=None):
     query = query or {}
     query["action"] = action
     item = xbmcgui.ListItem(label=label)
+    try:
+        menu_art = fallback_art()
+        item.setArt({"icon": menu_art, "thumb": menu_art, "poster": menu_art, "fanart": menu_art})
+        item.setInfo("video", {"title": safe_text(label), "mediatype": "video"})
+    except Exception:
+        pass
     add_home_context(item, label, query)
     xbmcplugin.addDirectoryItem(HANDLE, addon_url(query), item, isFolder=False)
 
@@ -441,38 +537,50 @@ def root_menu():
 
 
 def api_root_menu():
-    add_directory("[B]Rýchle hľadanie filmov[/B]", "api_search", {"category": "movies"})
-    add_directory("[B]Rýchle hľadanie seriálov[/B]", "api_search", {"category": "series"})
-    add_directory("Vyhľadávanie", "api_search_menu")
+    set_plugin_category("Webshare Atlas")
+    # Keep the home page short and predictable.  Detailed filters belong in
+    # the two media sections; the reference addon does not make users pass a
+    # wall of technical categories before reaching films or series.
+    add_directory("Hľadať", "api_search_menu")
+    add_directory("Hľadať film", "api_search", {"category": "movies"})
+    add_directory("Hľadať seriál", "api_search", {"category": "series"})
     add_directory("Filmy", "api_movies")
     add_directory("Seriály", "api_series")
-    static_counts = None
-    if catalog_mode() == "static":
-        try:
-            static_counts = {row.get("id"): int(row.get("count") or 0) for row in static_catalog().categories() if isinstance(row, dict)}
-        except CatalogApiError:
-            static_counts = {}
-    for label, category in (
-        ("Dokumentárne", "documentaries"),
-        ("Koncerty", "concerts"),
-        ("Anime", "anime"),
-        ("Šport", "sports"),
-        ("Detské", "kids"),
-        ("Hudobné videá", "music-videos"),
-        ("Ostatné", "other"),
-        ("Nezaradené", "unknown"),
-    ):
-        if static_counts is not None and static_counts.get(category, 0) <= 0:
-            continue
-        add_directory(label, "api_media", {"category": category, "sort": "recent"})
+    add_directory("Novinky", "api_media", {"sort": "release_date_desc", "order": "desc"})
+    add_directory("Najnovšie pridané", "api_media", {"sort": "recent", "order": "desc"})
+    add_directory("Ďalší obsah", "api_categories")
     add_directory("Obľúbené", "favorites")
     add_directory("História", "history")
     add_command("Nastavenia", "settings")
     xbmcplugin.endOfDirectory(HANDLE)
 
 
+def api_categories_menu():
+    """Show only populated secondary catalog categories."""
+    set_plugin_category("Webshare Atlas / Ďalší obsah")
+    try:
+        categories = catalog_api().categories()
+    except CatalogApiError as exc:
+        notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+        return
+    if not isinstance(categories, list):
+        categories = []
+    for row in categories:
+        if not isinstance(row, dict):
+            continue
+        category = safe_text(row.get("id"))
+        count = safe_int(row.get("count"), 0)
+        if not category or count <= 0:
+            continue
+        label = safe_text(row.get("title") or category)
+        add_directory("{} ({})".format(label, count), "api_media", {"category": category, "sort": "recent", "order": "desc"})
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
+
+
 def api_search_menu():
     """Render category-scoped catalog search without inventing empty sections."""
+    set_plugin_category("Webshare Atlas / Vyhľadávanie")
     add_directory("Všetko", "api_search")
     added_categories = set()
     for label, category in (("Filmy", "movies"), ("Seriály", "series")):
@@ -502,6 +610,7 @@ def api_search_menu():
 
 
 def api_movies_menu():
+    set_plugin_category("Webshare Atlas / Filmy")
     add_directory("Novinky", "api_media", {"category": "movies", "sort": "release_date_desc"})
     add_directory("Najnovšie pridané", "api_media", {"category": "movies", "sort": "recent", "order": "desc"})
     add_directory("Všetky filmy", "api_media", {"category": "movies", "sort": "title", "order": "asc"})
@@ -511,10 +620,12 @@ def api_movies_menu():
     add_directory("Kvalita", "api_quality", {"category": "movies"})
     add_directory("Dabing / titulky", "api_languages", {"category": "movies"})
     add_directory("Hľadať film", "api_search", {"category": "movies"})
+    xbmcplugin.setContent(HANDLE, "movies")
     xbmcplugin.endOfDirectory(HANDLE)
 
 
 def api_series_menu():
+    set_plugin_category("Webshare Atlas / Seriály")
     add_directory("Novinky", "api_media", {"category": "series", "sort": "series_release_date_desc", "order": "desc"})
     add_directory("Najnovšie pridané", "api_media", {"category": "series", "sort": "recent", "order": "desc"})
     add_directory("Najnovšie epizódy", "api_media", {"category": "series", "type": "episode", "sort": "episode_recent", "order": "desc"})
@@ -525,11 +636,14 @@ def api_series_menu():
     add_directory("Kvalita", "api_quality", {"category": "series"})
     add_directory("Dabing / titulky", "api_languages", {"category": "series"})
     add_directory("Hľadať seriál", "api_search", {"category": "series"})
+    xbmcplugin.setContent(HANDLE, "tvshows")
     xbmcplugin.endOfDirectory(HANDLE)
 
 
 def api_filter_menu(params, filter_name, param_key):
     category = params.get("category")
+    category_label = {"movies": "Filmy", "series": "Seriály"}.get(category, "Katalóg")
+    set_plugin_category("Webshare Atlas / {} / Filter".format(category_label))
     try:
         rows = catalog_api().filters(filter_name, category)
     except CatalogApiError as exc:
@@ -1050,6 +1164,20 @@ def listing_action(query):
 
 
 def api_media(params):
+    if not params.get("category") and params.get("sort") == "release_date_desc":
+        category_label = "Novinky"
+    elif not params.get("category") and params.get("sort") == "recent":
+        category_label = "Najnovšie pridané"
+    else:
+        category_label = {
+            "movies": "Filmy",
+            "series": "Seriály",
+            "concerts": "Koncerty",
+            "sports": "Šport",
+            "music-videos": "Hudobné videá",
+            "other": "Ostatné",
+        }.get(params.get("category"), "Katalóg")
+    set_plugin_category("Webshare Atlas / {}".format(category_label))
     page = int(params.get("page", "0"))
     category = params.get("category")
     request_params = {
@@ -1176,7 +1304,7 @@ def add_api_media(media):
     info_title = safe_text(media.get("title") if media.get("media_type") == "episode" else media.get("display_title") or media.get("title")) or "Bez názvu"
     year = media.get("year")
     plot = media_plot(media)
-    item = xbmcgui.ListItem(label=title)
+    item = xbmcgui.ListItem(label=title, label2=media_label2(media))
     info = {
         "title": info_title,
         "originaltitle": media.get("original_title") or media.get("title") or "",
@@ -1398,8 +1526,12 @@ def api_media_detail(params):
             except CatalogApiError:
                 live_metadata = {}
             meta = api_detail_meta(detail, live_metadata)
+            set_plugin_category("Seriály / Webshare Atlas / {}".format(meta.get("title") or detail.get("title") or "Seriál"))
             api_media_seasons(media_id, detail, meta)
             return
+        set_plugin_category("Webshare Atlas / {}".format(
+            detail.get("display_title") or detail.get("title") or "Video"
+        ))
         file_response = catalog_api().files(media_id, page=page + 1, limit=page_size())
         if not isinstance(file_response, dict):
             raise CatalogApiError("Katalógové API vrátilo neplatné súbory")
@@ -1435,6 +1567,7 @@ def api_detail_meta(detail, live_metadata):
         "title": detail.get("display_title") or detail.get("title") or "",
         "original_title": detail.get("original_title") or "",
         "overview": live_metadata.get("overview") or detail.get("overview") or "",
+        "year": live_metadata.get("year") or detail.get("year") or 0,
         "genres": live_metadata.get("genres") or [genre.get("name", "") if isinstance(genre, dict) else str(genre) for genre in detail.get("genres") or []],
         "rating": live_metadata.get("rating") or detail.get("rating") or 0,
         "runtime": live_metadata.get("runtimeMinutes") or detail.get("runtime_minutes") or 0,
@@ -1443,6 +1576,7 @@ def api_detail_meta(detail, live_metadata):
         "cast": detail.get("cast") or [],
         "poster": live_metadata.get("posterUrl") or detail.get("poster_url") or "",
         "backdrop": live_metadata.get("backdropUrl") or detail.get("backdrop_url") or "",
+        "season_numbers": [],
     }
     meta = enrich_api_meta_from_tmdb_id(detail, meta)
     return enrich_api_meta_from_tmdb_title(detail, meta)
@@ -1450,8 +1584,6 @@ def api_detail_meta(detail, live_metadata):
 
 def api_media_seasons(media_id, detail, meta=None):
     meta = meta or api_detail_meta(detail, {})
-    live_files = load_live_series_files(media_id, detail)
-    live_groups = live_episode_groups(live_files)
     try:
         response = catalog_api().seasons(media_id) or {}
         seasons = response.get("data") or []
@@ -1459,27 +1591,44 @@ def api_media_seasons(media_id, detail, meta=None):
         notify(str(exc), xbmcgui.NOTIFICATION_ERROR)
         seasons = []
 
-    season_counts = {}
+    season_by_number = {}
     for season in seasons:
+        if not isinstance(season, dict):
+            continue
         season_number = int(season.get("season_number") or 0)
-        season_counts[season_number] = int(season.get("episode_count") or 0)
+        season_by_number[season_number] = dict(season)
+    requested_seasons = [row for row in season_by_number if row >= 0]
+    requested_seasons.extend(meta.get("season_numbers") or [])
+    live_files = load_live_series_files(media_id, detail, requested_seasons)
+    live_groups = live_episode_groups(live_files)
+    live_summaries = season_summaries_from_live(live_files)
     for season_number in sorted({key[0] for key in live_groups}):
-        live_count = len([key for key in live_groups if key[0] == season_number])
-        season_counts[season_number] = max(season_counts.get(season_number, 0), live_count)
+        current = season_by_number.setdefault(season_number, {"season_number": season_number})
+        live_summary = live_summaries.get(season_number) or {}
+        current["episode_count"] = max(int(current.get("episode_count") or 0), int(live_summary.get("episode_count") or 0))
+        for key in ("year", "runtime_minutes", "languages"):
+            if not current.get(key) and live_summary.get(key):
+                current[key] = live_summary[key]
 
-    if not season_counts:
+    if not season_by_number:
         api_media_season({"media_id": media_id})
         return
 
-    for season_number in sorted(season_counts):
-        episode_count = season_counts[season_number]
-        label = "Séria {:02d}".format(season_number) if season_number else "Séria ?"
-        if episode_count:
-            label = "{} ({} epizód)".format(label, episode_count)
-        item = xbmcgui.ListItem(label=label)
+    title = meta.get("title") or detail.get("display_title") or detail.get("title") or "Seriál"
+    set_plugin_category("Seriály / Webshare Atlas / {}".format(title))
+    for season_number in sorted(season_by_number):
+        summary = season_by_number[season_number]
+        episode_count = int(summary.get("episode_count") or 0)
+        label = season_display_label(season_number, summary, episode_count)
+        label2 = format_runtime(summary.get("runtime_minutes")) or (
+            "{} epizód".format(episode_count) if episode_count else ""
+        )
+        item = xbmcgui.ListItem(label=label, label2=label2)
         plot = meta.get("overview") or "Popis seriálu nie je dostupný."
         genres = safe_text_list(meta.get("genres"))
         countries = safe_text_list(meta.get("countries"))
+        poster = summary.get("poster_url") or meta.get("poster") or detail.get("poster_url") or fallback_art()
+        fanart = summary.get("backdrop_url") or meta.get("backdrop") or detail.get("backdrop_url") or fallback_art()
         item.setInfo(
             "video",
             {
@@ -1487,19 +1636,21 @@ def api_media_seasons(media_id, detail, meta=None):
                 "tvshowtitle": detail.get("display_title") or detail.get("title") or "",
                 "plot": plot,
                 "plotoutline": plot,
-                "year": safe_int(meta.get("year") or detail.get("year")),
+                "year": safe_int(summary.get("year") or meta.get("year") or detail.get("year")),
                 "genre": ", ".join(genres),
                 "rating": safe_float(meta.get("rating")),
                 "country": ", ".join(countries),
                 "season": season_number,
+                "episode": episode_count,
+                "duration": safe_int(summary.get("runtime_minutes")) * 60,
                 "mediatype": "season",
             },
         )
         item.setArt(
             {
-                "poster": meta.get("poster") or detail.get("poster_url") or fallback_art(),
-                "thumb": meta.get("poster") or detail.get("poster_url") or fallback_art(),
-                "fanart": meta.get("backdrop") or detail.get("backdrop_url") or fallback_art(),
+                "poster": poster,
+                "thumb": poster,
+                "fanart": fanart,
             }
         )
         item.setProperty("plot", plot)
@@ -1536,7 +1687,7 @@ def api_media_season(params):
     static_episodes = response.get("data", []) or []
     live_files = []
     try:
-        live_files = load_live_series_files(media_id, detail)
+        live_files = load_live_series_files(media_id, detail, [safe_int(season)])
     except CatalogApiError:
         live_files = []
     live_groups = live_episode_groups(live_files)
@@ -1554,6 +1705,9 @@ def api_media_season(params):
         add_live_episode(media_id, detail, season_number, episode_number, rows, series_meta)
     pagination = response.get("pagination") or {}
     add_next_page(page + 1 < int(pagination.get("pages") or 0), "api_media_season", params, page)
+    set_plugin_category("Seriály / Webshare Atlas / {} / Séria {:02d}".format(
+        series_meta.get("title") or detail.get("title") or "Seriál", safe_int(season)
+    ))
     xbmcplugin.setContent(HANDLE, "episodes")
     xbmcplugin.endOfDirectory(HANDLE, succeeded=True)
 
@@ -1579,7 +1733,21 @@ def live_episode_files_for_detail(detail):
 def add_live_episode(media_id, detail, season, episode, rows, series_meta=None):
     title = detail.get("display_title") or detail.get("title") or "Seriál"
     episode_title = "{} S{:02d}E{:02d}".format(title, season, episode)
-    item = xbmcgui.ListItem(label=episode_title)
+    live_languages = []
+    for row in rows or []:
+        for language in display_languages(row.get("languages")):
+            if language not in live_languages:
+                live_languages.append(language)
+    item = xbmcgui.ListItem(
+        label=episode_title,
+        label2=media_label2({
+            "media_type": "episode",
+            "season_number": season,
+            "episode_number": episode,
+            "year": detail.get("year"),
+            "languages": live_languages,
+        }),
+    )
     meta = series_meta or api_detail_meta(detail, {})
     plot = meta.get("overview") or detail.get("overview") or "Popis epizódy nie je dostupný."
     item.setInfo(
@@ -1700,6 +1868,7 @@ def enrich_api_meta_from_tmdb_id(detail, meta):
     for target, source in (
         ("title", "title"),
         ("original_title", "original_title"),
+        ("year", "year"),
         ("overview", "overview"),
         ("genres", "genres"),
         ("rating", "rating"),
@@ -1709,6 +1878,7 @@ def enrich_api_meta_from_tmdb_id(detail, meta):
         ("cast", "cast"),
         ("poster", "poster"),
         ("backdrop", "backdrop"),
+        ("season_numbers", "season_numbers"),
     ):
         if not merged.get(target) and data.get(source):
             merged[target] = data[source]
@@ -1754,6 +1924,7 @@ def enrich_api_meta_from_tmdb_title(detail, meta):
     for target, source in (
         ("title", "title"),
         ("original_title", "original_title"),
+        ("year", "year"),
         ("overview", "overview"),
         ("genres", "genres"),
         ("rating", "rating"),
@@ -1763,6 +1934,7 @@ def enrich_api_meta_from_tmdb_title(detail, meta):
         ("cast", "cast"),
         ("poster", "poster"),
         ("backdrop", "backdrop"),
+        ("season_numbers", "season_numbers"),
     ):
         if not merged.get(target) and data.get(source):
             merged[target] = data[source]
@@ -1785,6 +1957,66 @@ def media_display_label(media):
             return "{} ({})".format(title, coordinates)
     year = safe_int(media.get("year"))
     return "{} ({})".format(title, year) if year else title
+
+
+def media_label2(media):
+    media = media if isinstance(media, dict) else {}
+    parts = []
+    if media.get("media_type") == "episode":
+        season = safe_int(media.get("season_number"), -1)
+        episode = safe_int(media.get("episode_number"), -1)
+        if season >= 0 and episode >= 0:
+            parts.append("S{:02d}E{:02d}".format(season, episode))
+    year = safe_int(media.get("year"), 0)
+    if year:
+        parts.append(str(year))
+    languages = display_languages(media.get("languages"))
+    if languages:
+        parts.append(", ".join(languages))
+    runtime = format_runtime(media.get("runtime_minutes"))
+    if runtime:
+        parts.append(runtime)
+    return " • ".join(parts)
+
+
+def season_display_label(season_number, summary, episode_count=0):
+    summary = summary if isinstance(summary, dict) else {}
+    label = "Séria {:02d}".format(max(0, safe_int(season_number)))
+    languages = display_languages(summary.get("languages"))
+    year = safe_int(summary.get("year"), 0)
+    suffix = []
+    if languages:
+        suffix.append(", ".join(languages))
+    if year:
+        suffix.append("({})".format(year))
+    if suffix:
+        return "{} - {}".format(label, " ".join(suffix))
+    if episode_count:
+        return "{} ({} epizód)".format(label, episode_count)
+    return label
+
+
+def season_summaries_from_live(rows):
+    grouped = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        season = safe_int(row.get("season_number"), -1)
+        episode = safe_int(row.get("episode_number"), -1)
+        if season < 0 or episode < 0:
+            continue
+        summary = grouped.setdefault(
+            season,
+            {"season_number": season, "episode_count": 0, "languages": [], "_episodes": set()},
+        )
+        summary["_episodes"].add(episode)
+        summary["episode_count"] = len(summary["_episodes"])
+        for language in display_languages(row.get("languages")):
+            if language not in summary["languages"]:
+                summary["languages"].append(language)
+    for summary in grouped.values():
+        summary.pop("_episodes", None)
+    return grouped
 
 
 def media_plot(media, fallback=""):
@@ -2678,6 +2910,7 @@ def router():
         "api_search": lambda: api_search(params),
         "api_movies": api_movies_menu,
         "api_series": api_series_menu,
+        "api_categories": api_categories_menu,
         "api_years": lambda: api_years_menu(params),
         "api_genres": lambda: api_genres_menu(params),
         "api_quality": lambda: api_quality_menu(params),

@@ -565,17 +565,52 @@ function createCatalogRepository(database, config) {
 
   function getSeasons(tvshowId) {
     const rows = database.prepare(`
-      SELECT episode.season_number AS season_number, COUNT(*) AS episode_count
+      SELECT episode.season_number AS season_number,
+        COUNT(DISTINCT episode.id) AS episode_count,
+        MAX(COALESCE(episode.year, CAST(substr(episode.release_date, 1, 4) AS INTEGER))) AS year,
+        MAX(episode.runtime_minutes) AS runtime_minutes,
+        MIN(NULLIF(episode.poster_url, '')) AS poster_url,
+        MIN(NULLIF(episode.backdrop_url, '')) AS backdrop_url
       FROM media episode
       WHERE episode.tvshow_id = ? AND episode.is_active = 1 AND episode.season_number IS NOT NULL
       GROUP BY episode.season_number
       ORDER BY episode.season_number
     `).all(tvshowId);
+    const languageRows = database.prepare(`
+      SELECT episode.season_number AS season_number, upper(language.value) AS language
+      FROM media episode
+      JOIN files season_file ON season_file.media_id = episode.id
+      JOIN json_each(CASE
+        WHEN json_valid(season_file.parsed_languages_json) THEN season_file.parsed_languages_json
+        ELSE '[]'
+      END) language
+      WHERE episode.tvshow_id = ?
+        AND episode.is_active = 1
+        AND season_file.is_active = 1
+        AND season_file.is_playable_video = 1
+        AND episode.season_number IS NOT NULL
+      GROUP BY episode.season_number, upper(language.value)
+      ORDER BY episode.season_number, upper(language.value)
+    `).all(tvshowId);
+    const languagesBySeason = new Map();
+    for (const row of languageRows) {
+      if (!languagesBySeason.has(row.season_number)) languagesBySeason.set(row.season_number, []);
+      languagesBySeason.get(row.season_number).push(row.language);
+    }
     return {
-      data: rows.map((row) => ({
-        season_number: row.season_number,
-        episode_count: row.episode_count,
-      })),
+      data: rows.map((row) => {
+        const summary = {
+          season_number: row.season_number,
+          episode_count: row.episode_count,
+        };
+        if (row.year) summary.year = row.year;
+        if (row.runtime_minutes) summary.runtime_minutes = row.runtime_minutes;
+        if (row.poster_url) summary.poster_url = row.poster_url;
+        if (row.backdrop_url) summary.backdrop_url = row.backdrop_url;
+        const languages = languagesBySeason.get(row.season_number) || [];
+        if (languages.length) summary.languages = languages;
+        return summary;
+      }),
     };
   }
 

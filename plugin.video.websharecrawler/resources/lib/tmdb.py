@@ -12,7 +12,7 @@ from resources.lib.metadata import YEAR_RE, normalize_title
 
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMAGE = "https://image.tmdb.org/t/p/"
-USER_AGENT = "Webshare Atlas Kodi Addon/0.8.32"
+USER_AGENT = "Webshare Atlas Kodi Addon/0.8.33"
 
 
 def clean_query(title):
@@ -187,6 +187,11 @@ class TMDbClient(object):
         genres = [item.get("name") for item in details.get("genres", []) if item.get("name")]
         creators = [item.get("name") for item in details.get("created_by", []) if item.get("name")]
         runtime_values = [value for value in details.get("episode_run_time", []) if value]
+        season_numbers = [
+            int(season.get("season_number"))
+            for season in details.get("seasons", [])
+            if isinstance(season, dict) and str(season.get("season_number", "")).isdigit()
+        ]
 
         return {
             "tmdb_id": details.get("id"),
@@ -203,6 +208,7 @@ class TMDbClient(object):
             "poster": _image(details.get("poster_path"), "w500"),
             "backdrop": _image(details.get("backdrop_path"), "w1280"),
             "language": details.get("_overview_language") or details.get("_language") or self.languages()[0],
+            "season_numbers": sorted(set(season_numbers)),
         }
 
     def fetch_tv_by_title(self, title, year=None):
