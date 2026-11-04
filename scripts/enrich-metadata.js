@@ -20,6 +20,7 @@ function parseArguments(argv) {
     candidateType: null,
     candidateKey: null,
     provider: "tmdb",
+    reprocessMatched: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
@@ -30,6 +31,7 @@ function parseArguments(argv) {
     else if (value === "--recent-first") options.recentFirst = true;
     else if (value === "--candidate-type") options.candidateType = argv[++index] || null;
     else if (value === "--candidate-key") options.candidateKey = argv[++index] || null;
+    else if (value === "--reprocess-matched") options.reprocessMatched = true;
     else if (value === "--limit") options.limit = Number.parseInt(argv[++index], 10) || 1000;
     else if (value === "--provider") options.provider = argv[++index] || "tmdb";
   }
@@ -37,6 +39,7 @@ function parseArguments(argv) {
 }
 
 function jobStatuses(options) {
+  if (options.reprocessMatched) return ["pending", "temporary_error", "not_found", "ambiguous", "matched"];
   if (options.onlyPending) return ["pending"];
   if (options.retryFailed) return ["pending", "temporary_error", "not_found", "ambiguous"];
   return ["pending", "temporary_error"];
@@ -205,6 +208,44 @@ function applyTvMatch(database, job, metadata, confidence, config) {
   }
   database.prepare("UPDATE media SET is_active = 1 WHERE id = ?").run(showId);
   reconcileCanonicalSeriesInPlace(database, showId, { title: metadata.title, year: metadata.year });
+  // The metadata job is created from one candidate, but a series can already
+  // contain many older episodes that were discovered under the local root.
+  // Once the canonical TMDB show exists, link every episode with valid
+  // coordinates so every season/episode gets a live TMDB URL.  Descriptions
+  // remain deliberately NULL and are fetched by the addon/API at view time.
+  const allSeriesEpisodes = database.prepare(`
+    SELECT id, season_number, episode_number
+    FROM media
+    WHERE tvshow_id = ? AND media_type = 'episode' AND is_active = 1
+  `).all(showId);
+  const linkAllEpisodes = database.prepare(`
+    UPDATE media SET external_source = 'tmdb', external_id = ?, external_url = ?,
+      media_type = 'episode', category = 'series', tvshow_id = ?,
+      poster_url = COALESCE(poster_url, ?), backdrop_url = COALESCE(backdrop_url, ?),
+      metadata_language = ?, metadata_status = 'matched', metadata_confidence = ?,
+      metadata_updated_at = ?, classifier_version = ?, updated_at = ?
+    WHERE id = ?
+  `);
+  for (const episode of allSeriesEpisodes) {
+    const seasonNumber = Number.parseInt(String(episode.season_number ?? ""), 10);
+    const episodeNumber = Number.parseInt(String(episode.episode_number ?? ""), 10);
+    if (!Number.isInteger(seasonNumber) || seasonNumber < 0 || !Number.isInteger(episodeNumber) || episodeNumber < 0) continue;
+    const episodeExternalId = `${metadata.externalId}:s${seasonNumber}:e${episodeNumber}`;
+    linkAllEpisodes.run(
+      episodeExternalId,
+      `https://www.themoviedb.org/tv/${metadata.externalId}/season/${seasonNumber}/episode/${episodeNumber}`,
+      showId,
+      metadata.posterUrl,
+      metadata.backdropUrl,
+      config.tmdbLanguage,
+      confidence,
+      now,
+      showClassification.classifierVersion,
+      now,
+      episode.id,
+    );
+    mediaIds.push(episode.id);
+  }
   for (const previousShowId of previousShowIds) {
     if (previousShowId === showId) continue;
     database.prepare(`
