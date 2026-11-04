@@ -176,7 +176,25 @@ function applyTvMatch(database, job, metadata, confidence, config) {
     if (!episode.media_id) continue;
     const previousEpisodeMedia = database.prepare("SELECT tvshow_id FROM media WHERE id = ?").get(episode.media_id);
     if (previousEpisodeMedia?.tvshow_id) previousShowIds.add(previousEpisodeMedia.tvshow_id);
-    const episodeExternalId = `${metadata.externalId}:s${episode.season_number}:e${episode.episode_number}`;
+    const seasonNumber = Number.parseInt(String(episode.season_number ?? ""), 10);
+    const episodeNumber = Number.parseInt(String(episode.episode_number ?? ""), 10);
+    const hasValidCoordinates = Number.isInteger(seasonNumber) && seasonNumber >= 0
+      && Number.isInteger(episodeNumber) && episodeNumber >= 0;
+    if (!hasValidCoordinates) {
+      database.prepare(`
+        UPDATE media SET external_source = NULL, external_id = NULL, external_url = NULL,
+          media_type = 'episode', category = 'series', tvshow_id = ?, metadata_language = ?,
+          metadata_status = 'matched', metadata_confidence = ?, metadata_updated_at = ?,
+          classifier_version = ?, updated_at = ? WHERE id = ?
+      `).run(
+        showId, config.tmdbLanguage, confidence, now, showClassification.classifierVersion, now, episode.media_id
+      );
+      database.prepare("UPDATE candidates SET status = 'matched', updated_at = ? WHERE id = ?")
+        .run(now, episode.id);
+      mediaIds.push(episode.media_id);
+      continue;
+    }
+    const episodeExternalId = `${metadata.externalId}:s${seasonNumber}:e${episodeNumber}`;
     const duplicateEpisode = database.prepare(`
       SELECT id FROM media
       WHERE external_source = 'tmdb' AND external_id = ? AND media_type = 'episode'
@@ -197,7 +215,7 @@ function applyTvMatch(database, job, metadata, confidence, config) {
         classifier_version = ?, updated_at = ? WHERE id = ?
     `).run(
       episodeExternalId,
-      `https://www.themoviedb.org/tv/${metadata.externalId}/season/${episode.season_number}/episode/${episode.episode_number}`,
+      `https://www.themoviedb.org/tv/${metadata.externalId}/season/${seasonNumber}/episode/${episodeNumber}`,
       showId,
       metadata.posterUrl, metadata.backdropUrl, config.tmdbLanguage, confidence, now,
       showClassification.classifierVersion, now, targetEpisodeMediaId
@@ -226,10 +244,18 @@ function applyTvMatch(database, job, metadata, confidence, config) {
       metadata_updated_at = ?, classifier_version = ?, updated_at = ?
     WHERE id = ?
   `);
+  const clearInvalidEpisodeLink = database.prepare(`
+    UPDATE media SET external_source = NULL, external_id = NULL, external_url = NULL,
+      metadata_updated_at = ?, updated_at = ?
+    WHERE id = ? AND external_source = 'tmdb' AND external_id LIKE ?
+  `);
   for (const episode of allSeriesEpisodes) {
     const seasonNumber = Number.parseInt(String(episode.season_number ?? ""), 10);
     const episodeNumber = Number.parseInt(String(episode.episode_number ?? ""), 10);
-    if (!Number.isInteger(seasonNumber) || seasonNumber < 0 || !Number.isInteger(episodeNumber) || episodeNumber < 0) continue;
+    if (!Number.isInteger(seasonNumber) || seasonNumber < 0 || !Number.isInteger(episodeNumber) || episodeNumber < 0) {
+      clearInvalidEpisodeLink.run(now, now, episode.id, `${metadata.externalId}:s%`);
+      continue;
+    }
     const episodeExternalId = `${metadata.externalId}:s${seasonNumber}:e${episodeNumber}`;
     linkAllEpisodes.run(
       episodeExternalId,
